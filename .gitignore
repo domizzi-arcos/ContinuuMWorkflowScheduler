@@ -9,3 +9,4 @@ analysis/figures/
 *.pdf
 *.log
 .worktrees/
+.worktrees/
