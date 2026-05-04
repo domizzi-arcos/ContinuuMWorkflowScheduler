@@ -4,9 +4,8 @@
 __pycache__/
 venv/
 logs/
-results/
+/results/
 analysis/figures/
 *.pdf
 *.log
-.worktrees/
 .worktrees/
