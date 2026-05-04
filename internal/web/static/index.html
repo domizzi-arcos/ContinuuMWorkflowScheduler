@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Distributed Task Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <span class="logo">⬡</span>
+  <h1>Distributed Task Scheduler</h1>
+  <button id="pause-toggle" class="header-btn" type="button" disabled>Pause Simulation</button>
+  <button id="restart-toggle" class="header-btn restart-btn" type="button" disabled>Restart Simulation</button>
+  <span id="sim-badge" class="sim-badge">Running</span>
+  <span id="ws-badge" class="ws-badge disconnected">Connecting…</span>
+</header>
+
+<nav>
+  <button class="tab-btn active" data-tab="arch">Architecture</button>
+  <button class="tab-btn" data-tab="results">Results</button>
+  <button class="tab-btn" data-tab="servers">Servers</button>
+</nav>
+
+<div id="pane-arch" class="tab-pane active">
+  <div id="arch-pane">
+    <div id="arch-layout">
+      <section class="arch-panel arch-visual-panel">
+        <div class="panel-header">
+          <div>
+            <div class="panel-kicker">Traffic Map</div>
+            <h2 class="panel-title">Runtime Dataflow</h2>
+          </div>
+          <div class="traffic-legend" aria-label="Traffic intensity legend">
+            <span>Low</span>
+            <div class="traffic-ramp"></div>
+            <span>High</span>
+          </div>
+        </div>
+        <svg id="arch-svg" width="1650" height="690"></svg>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div id="pane-results" class="tab-pane">
+  <div class="toolbar">
+    <label for="status-filter" style="color:var(--muted);font-size:12px">STATUS</label>
+    <select id="status-filter">
+      <option value="">All statuses</option>
+      <option value="PENDING">PENDING</option>
+      <option value="QUEUED">QUEUED</option>
+      <option value="RUNNING">RUNNING</option>
+      <option value="DONE">DONE</option>
+    </select>
+    <label for="tier-filter" style="color:var(--muted);font-size:12px;margin-left:8px">TIER</label>
+    <select id="tier-filter">
+      <option value="">All tiers</option>
+      <option value="EDGE">EDGE</option>
+      <option value="FOG">FOG</option>
+      <option value="CLOUD">CLOUD</option>
+    </select>
+    <span id="results-count" style="color:var(--muted);font-size:12px;margin-left:auto"></span>
+  </div>
+  <div id="results-pane">
+    <table class="results-table" id="results-table">
+      <thead>
+        <tr>
+          <th>Task</th>
+          <th>Target</th>
+          <th>Costs</th>
+          <th>Status</th>
+          <th>Server</th>
+          <th>Makespan</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="results-tbody"></tbody>
+    </table>
+    <div class="empty-state" id="results-empty">
+      <div class="icon">◌</div>
+      <p>No execution instances yet…</p>
+    </div>
+  </div>
+</div>
+
+<div id="pane-servers" class="tab-pane">
+  <div id="servers-pane">
+    <section class="arch-panel server-panel standalone-panel">
+      <div class="panel-header">
+        <div>
+          <div class="panel-kicker">Servers</div>
+          <h2 class="panel-title">Capacity by Node</h2>
+        </div>
+        <div id="server-summary" class="server-summary"></div>
+      </div>
+      <div id="server-grid"></div>
+    </section>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+<div id="arch-tooltip" class="arch-tooltip" hidden></div>
+</body>
+</html>
