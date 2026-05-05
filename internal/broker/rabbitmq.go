@@ -3,17 +3,19 @@ package broker
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 const (
-	TaskExchange   = "task_exchange"
-	ResultExchange = "result_exchange"
-	EdgeQueue      = "edge_queue"
-	FogQueue       = "fog_queue"
-	CloudQueue     = "cloud_queue"
-	ResultQueue    = "result_queue"
+	TaskExchange          = "task_exchange"
+	ResultExchange        = "result_exchange"
+	EdgeQueue             = "edge_queue"
+	FogQueue              = "fog_queue"
+	CloudQueue            = "cloud_queue"
+	ResultQueue           = "result_queue"
+	workerConcurrencyLimit = 50 // max unacked messages per channel; matches worker semaphore
 )
 
 // Broker wraps a single RabbitMQ connection and channel.
@@ -21,6 +23,7 @@ const (
 type Broker struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
+	mu      sync.Mutex
 }
 
 func NewBroker(url string) (*Broker, error) {
@@ -73,12 +76,18 @@ func (b *Broker) setup() error {
 	if err := b.channel.QueueBind(ResultQueue, "", ResultExchange, false, nil); err != nil {
 		return fmt.Errorf("bind %s: %w", ResultQueue, err)
 	}
+	// Limit unacknowledged deliveries per channel so the broker doesn't flood consumers.
+	if err := b.channel.Qos(workerConcurrencyLimit, 0, false); err != nil {
+		return fmt.Errorf("set QoS: %w", err)
+	}
 	return nil
 }
 
 // PublishTask routes a task message to the correct tier queue.
 // serverType must be one of "edge", "fog", "cloud".
 func (b *Broker) PublishTask(serverType string, body []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.channel.PublishWithContext(
 		context.Background(),
 		TaskExchange, serverType,
@@ -89,6 +98,8 @@ func (b *Broker) PublishTask(serverType string, body []byte) error {
 
 // PublishResult broadcasts a result message to all result consumers.
 func (b *Broker) PublishResult(body []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.channel.PublishWithContext(
 		context.Background(),
 		ResultExchange, "",
@@ -103,6 +114,8 @@ func (b *Broker) ConsumeQueue(queueName, consumerTag string) (<-chan amqp.Delive
 }
 
 func (b *Broker) PurgeQueues() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	queues := []string{EdgeQueue, FogQueue, CloudQueue, ResultQueue}
 	for _, queue := range queues {
 		if _, err := b.channel.QueuePurge(queue, false); err != nil {

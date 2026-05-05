@@ -159,7 +159,9 @@ func (s *simulationSession) StopAll() {
 	s.stopAllOnce.Do(func() {
 		close(s.done)
 		if s.worker != nil {
-			s.worker.Wait()
+			if !s.worker.WaitWithTimeout(5 * time.Second) {
+				log.Println("[Session] Warning: worker drain timed out after 5s")
+			}
 		}
 		s.wg.Wait()
 		if s.broker != nil {

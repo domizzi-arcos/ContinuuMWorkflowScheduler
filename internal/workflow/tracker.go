@@ -165,13 +165,12 @@ func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 }
 
 func (t *Tracker) allDepsDone(depExecIDs []string) bool {
-	for _, depID := range depExecIDs {
-		dep, err := t.store.GetExecution(depID)
-		if err != nil || dep.Status != "DONE" {
-			return false
-		}
+	done, err := t.store.AllExecutionsDone(depExecIDs)
+	if err != nil {
+		log.Printf("[Tracker] AllExecutionsDone: %v", err)
+		return false
 	}
-	return true
+	return done
 }
 
 func containsStr(slice []string, item string) bool {

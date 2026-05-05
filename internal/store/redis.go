@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +28,31 @@ type RawEntry struct {
 	Value     interface{} `json:"value"`
 	ValueType string      `json:"value_type"`
 	SizeBytes int         `json:"size_bytes"`
+}
+
+// scanKeys iterates over all keys matching pattern using SCAN (non-blocking).
+func (s *RedisStore) scanKeys(ctx context.Context, pattern string) ([]string, error) {
+	var keys []string
+	iter := s.client.Scan(ctx, 0, pattern, 100).Iterator()
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+	}
+	return keys, iter.Err()
+}
+
+// retryBackoff sleeps with exponential backoff + jitter before the next WATCH retry.
+// No-op on attempt 0 (first try).
+func retryBackoff(attempt int) {
+	if attempt == 0 {
+		return
+	}
+	ms := 1 << uint(attempt-1) // 1, 2, 4, 8, 16, 32 ms …
+	if ms > 32 {
+		ms = 32
+	}
+	base := time.Duration(ms) * time.Millisecond
+	jitter := time.Duration(rand.Int63n(int64(base/4) + 1))
+	time.Sleep(base + jitter)
 }
 
 func NewRedisStore(addr string, db int) (*RedisStore, error) {
@@ -61,7 +87,7 @@ func (s *RedisStore) GetTask(id string) (*models.Task, error) {
 
 func (s *RedisStore) GetAllTasks() ([]*models.Task, error) {
 	ctx := context.Background()
-	keys, err := s.client.Keys(ctx, "task:*").Result()
+	keys, err := s.scanKeys(ctx, "task:*")
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +193,7 @@ func (s *RedisStore) GetExecution(id string) (*models.Execution, error) {
 
 func (s *RedisStore) GetAllExecutions() ([]*models.Execution, error) {
 	ctx := context.Background()
-	keys, err := s.client.Keys(ctx, "execution:*").Result()
+	keys, err := s.scanKeys(ctx, "execution:*")
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +326,7 @@ func (s *RedisStore) GetServer(id string) (*models.Server, error) {
 
 func (s *RedisStore) GetAllServers() ([]*models.Server, error) {
 	ctx := context.Background()
-	keys, err := s.client.Keys(ctx, "server:*").Result()
+	keys, err := s.scanKeys(ctx, "server:*")
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +367,7 @@ func (s *RedisStore) GetTaskResult(executionID string) (*models.TaskResult, erro
 
 func (s *RedisStore) GetAllTaskResults() ([]*models.TaskResult, error) {
 	ctx := context.Background()
-	keys, err := s.client.Keys(ctx, "result:*").Result()
+	keys, err := s.scanKeys(ctx, "result:*")
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +447,7 @@ func (s *RedisStore) computeWorkflowMakespan(wi *models.WorkflowInstance) int64 
 
 func (s *RedisStore) GetAllWorkflowInstances() ([]*models.WorkflowInstance, error) {
 	ctx := context.Background()
-	keys, err := s.client.Keys(ctx, "workflow:*").Result()
+	keys, err := s.scanKeys(ctx, "workflow:*")
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +473,7 @@ func (s *RedisStore) GetAllWorkflowInstances() ([]*models.WorkflowInstance, erro
 
 func (s *RedisStore) GetAllRawEntries() ([]RawEntry, error) {
 	ctx := context.Background()
-	keys, err := s.client.Keys(ctx, "*").Result()
+	keys, err := s.scanKeys(ctx, "*")
 	if err != nil {
 		return nil, err
 	}
@@ -493,7 +519,7 @@ func (s *RedisStore) ResetSimulationData() error {
 	}
 
 	for _, pattern := range patterns {
-		keys, err := s.client.Keys(ctx, pattern).Result()
+		keys, err := s.scanKeys(ctx, pattern)
 		if err != nil {
 			return err
 		}
@@ -505,6 +531,36 @@ func (s *RedisStore) ResetSimulationData() error {
 		}
 	}
 	return nil
+}
+
+// AllExecutionsDone batch-fetches execution statuses via MGet and returns true
+// only when every execution in execIDs has status "DONE".
+func (s *RedisStore) AllExecutionsDone(execIDs []string) (bool, error) {
+	if len(execIDs) == 0 {
+		return true, nil
+	}
+	ctx := context.Background()
+	keys := make([]string, len(execIDs))
+	for i, id := range execIDs {
+		keys[i] = "execution:" + id
+	}
+	vals, err := s.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return false, err
+	}
+	for _, v := range vals {
+		if v == nil {
+			return false, nil
+		}
+		var exec models.Execution
+		if err := json.Unmarshal([]byte(v.(string)), &exec); err != nil {
+			return false, err
+		}
+		if exec.Status != "DONE" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *RedisStore) updateExecution(executionID string, mutate func(*models.Execution) error) (*models.Execution, error) {
@@ -537,6 +593,7 @@ func (s *RedisStore) updateExecution(executionID string, mutate func(*models.Exe
 			return &updated, nil
 		}
 		if errors.Is(err, redis.TxFailedErr) {
+			retryBackoff(attempt)
 			continue
 		}
 		return nil, err
@@ -574,6 +631,7 @@ func (s *RedisStore) updateServer(serverID string, mutate func(*models.Server) e
 			return &updated, nil
 		}
 		if errors.Is(err, redis.TxFailedErr) {
+			retryBackoff(attempt)
 			continue
 		}
 		return nil, err

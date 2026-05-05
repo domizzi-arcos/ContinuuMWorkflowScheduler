@@ -2,17 +2,25 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/broker"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/control"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 )
+
+var errBadMessage = errors.New("bad message")
+
+// concurrencyLimit caps simultaneous task goroutines; must match broker.workerConcurrencyLimit.
+const concurrencyLimit = 50
 
 // Worker consumes task messages from the three tier queues and simulates execution.
 type Worker struct {
@@ -22,10 +30,17 @@ type Worker struct {
 	control   *control.Controller
 	consumers sync.WaitGroup
 	tasks     sync.WaitGroup
+	sem       chan struct{} // bounded task concurrency
 }
 
 func New(s *store.RedisStore, b *broker.Broker, algorithm string, ctrl *control.Controller) *Worker {
-	return &Worker{store: s, broker: b, algorithm: algorithm, control: ctrl}
+	return &Worker{
+		store:     s,
+		broker:    b,
+		algorithm: algorithm,
+		control:   ctrl,
+		sem:       make(chan struct{}, concurrencyLimit),
+	}
 }
 
 // StartAll launches one consumer goroutine per tier (edge, fog, cloud).
@@ -50,6 +65,21 @@ func (w *Worker) Wait() {
 	w.tasks.Wait()
 }
 
+func (w *Worker) WaitWithTimeout(timeout time.Duration) bool {
+	drained := make(chan struct{})
+	go func() {
+		w.consumers.Wait()
+		w.tasks.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 func (w *Worker) consumeTier(queueName, consumerTag string, done <-chan struct{}) {
 	deliveries, err := w.broker.ConsumeQueue(queueName, consumerTag)
 	if err != nil {
@@ -65,42 +95,53 @@ func (w *Worker) consumeTier(queueName, consumerTag string, done <-chan struct{}
 			if w.control != nil && !w.control.Wait(done) {
 				return
 			}
-			d.Ack(false)
+			w.sem <- struct{}{} // acquire slot; blocks when at concurrencyLimit
 			w.tasks.Add(1)
-			go func(body []byte) {
-				defer w.tasks.Done()
-				w.execute(body, done)
-			}(d.Body)
+			go func(d amqp.Delivery) {
+				defer func() {
+					<-w.sem // release slot
+					w.tasks.Done()
+				}()
+				if err := w.execute(d.Body, done); err != nil {
+					if errors.Is(err, errBadMessage) {
+						d.Nack(false, false)
+					} else {
+						d.Nack(false, true)
+					}
+					return
+				}
+				d.Ack(false)
+			}(d)
 		case <-done:
 			return
 		}
 	}
 }
 
-func (w *Worker) execute(body []byte, done <-chan struct{}) {
+func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 	var msg models.TaskMessage
 	if err := json.Unmarshal(body, &msg); err != nil {
 		log.Printf("[Worker] Bad message: %v", err)
-		return
+		return errBadMessage
 	}
 
 	execution, err := w.store.GetExecution(msg.ExecutionID)
 	if err != nil {
 		log.Printf("[Worker] Execution %s not found: %v", msg.ExecutionID, err)
-		return
+		return fmt.Errorf("get execution: %w", err)
 	}
 	task, err := w.store.GetTask(msg.TaskID)
 	if err != nil {
 		log.Printf("[Worker] Task %s not found: %v", msg.TaskID, err)
-		return
+		return fmt.Errorf("get task: %w", err)
 	}
 	srv, err := w.store.GetServer(msg.ServerID)
 	if err != nil {
 		log.Printf("[Worker] Server %s not found: %v", msg.ServerID, err)
-		return
+		return fmt.Errorf("get server: %w", err)
 	}
 	if w.control != nil && !w.control.Wait(done) {
-		return
+		return nil
 	}
 
 	startTime := time.Now().UTC()
@@ -121,7 +162,7 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) {
 
 	if w.control != nil {
 		if !w.control.Sleep(done, effectiveDuration) {
-			return
+			return nil
 		}
 	} else {
 		timer := time.NewTimer(effectiveDuration)
@@ -131,14 +172,14 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) {
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return
+			return nil
 		}
 	}
 
 	endTime := time.Now().UTC()
 	select {
 	case <-done:
-		return
+		return nil
 	default:
 	}
 
@@ -187,4 +228,5 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) {
 	if err := w.broker.PublishResult(resultBody); err != nil {
 		log.Printf("[Worker] PublishResult %s: %v", msg.ExecutionID, err)
 	}
+	return nil
 }

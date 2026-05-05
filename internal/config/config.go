@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -142,7 +144,40 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	applyDefaults(&cfg)
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
 	return &cfg, nil
+}
+
+func (cfg *Config) Validate() error {
+	if cfg.Redis.Address == "" {
+		return errors.New("redis.address is required")
+	}
+	if cfg.RabbitMQ.URL == "" {
+		return errors.New("rabbitmq.url is required")
+	}
+	if cfg.Web.Port < 1 || cfg.Web.Port > 65535 {
+		return fmt.Errorf("web.port %d is out of range [1, 65535]", cfg.Web.Port)
+	}
+	validAlgos := map[string]bool{
+		"round_robin": true, "random": true, "best_fit": true,
+		"worst_fit": true, "topsis": true,
+	}
+	if !validAlgos[cfg.Scheduler.Algorithm] {
+		return fmt.Errorf("scheduler.algorithm %q is not valid (must be one of: round_robin, random, best_fit, worst_fit, topsis)", cfg.Scheduler.Algorithm)
+	}
+	if cfg.Generator.TaskCount <= 0 {
+		return fmt.Errorf("generator.task_count must be > 0, got %d", cfg.Generator.TaskCount)
+	}
+	if cfg.Generator.PriorityMin > cfg.Generator.PriorityMax {
+		return fmt.Errorf("generator.priority_min (%d) > priority_max (%d)", cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
+	}
+	tw := cfg.Scheduler.TOPSISWeights
+	if sum := tw.Time + tw.Cost + tw.Energy; math.Abs(sum-1.0) > 0.001 {
+		return fmt.Errorf("scheduler.topsis_weights must sum to 1.0, got %.3f", sum)
+	}
+	return nil
 }
 
 func applyDefaults(cfg *Config) {
