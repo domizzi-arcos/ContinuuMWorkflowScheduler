@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 	"time"
@@ -34,7 +34,7 @@ type serverProfile struct {
 
 func seedServers(s *store.RedisStore, cfg *config.Config) error {
 	_, seed := newServerSeedRNG(cfg.Servers.Seed)
-	log.Printf("[Seeder] Randomizing server capacities with seed=%d", seed)
+	slog.Info("randomizing server capacities", "component", "seeder", "seed", seed)
 
 	tiers := []tierSeedConfig{
 		{
@@ -82,8 +82,11 @@ func seedServers(s *store.RedisStore, cfg *config.Config) error {
 			if err := s.StoreServer(srv); err != nil {
 				return fmt.Errorf("storing server %s: %w", srv.ID, err)
 			}
-			log.Printf("[Seeder] Server %s  type=%-5s  CPU=%d  MEM=%dMB  DISK=%dGB  latency=%dms  cost=%.2f$/hr  power=%dW",
-				srv.ID, srv.Type, srv.MaxCPU, srv.MaxMemory, srv.MaxDisk, srv.Latency, srv.CostPerHour, srv.PowerWatts)
+			slog.Debug("server seeded", "component", "seeder",
+				"id", srv.ID, "type", srv.Type, "cpu", srv.MaxCPU,
+				"mem_mb", srv.MaxMemory, "disk_gb", srv.MaxDisk,
+				"latency_ms", srv.Latency, "cost_per_hr", srv.CostPerHour, "power_w", srv.PowerWatts,
+			)
 		}
 	}
 

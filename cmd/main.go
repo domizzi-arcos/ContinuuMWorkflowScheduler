@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -19,7 +19,8 @@ import (
 func main() {
 	logCloser, logPath, err := setupExperimentLogging()
 	if err != nil {
-		log.Fatalf("Failed to configure logging: %v", err)
+		slog.Error("failed to configure logging", "err", err)
+		os.Exit(1)
 	}
 	defer logCloser()
 
@@ -30,7 +31,8 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("failed to load config", "err", err)
+		os.Exit(1)
 	}
 
 	experimentDurationSeconds := cfg.Experiment.DurationSeconds
@@ -39,33 +41,40 @@ func main() {
 		progressLogSeconds = 10
 	}
 
-	log.Printf(
-		"Config loaded: algorithm=%s task_count=%d edge<=%dms fog<=%dms",
-		cfg.Scheduler.Algorithm,
-		cfg.Generator.TaskCount,
-		cfg.Generator.EdgeMaxDurationMS,
-		cfg.Generator.FogMaxDurationMS,
+	slog.Info("config loaded",
+		"algorithm", cfg.Scheduler.Algorithm,
+		"task_count", cfg.Generator.TaskCount,
+		"edge_max_duration_ms", cfg.Generator.EdgeMaxDurationMS,
+		"fog_max_duration_ms", cfg.Generator.FogMaxDurationMS,
 	)
 	if logPath != "" {
-		log.Printf("[Experiment] Log file=%s", logPath)
+		slog.Info("experiment log file", "component", "experiment", "path", logPath)
 	}
 	if cfg.Experiment.DurationSeconds > 0 {
-		log.Printf("[Experiment] Window=%ds progress_log=%ds", cfg.Experiment.DurationSeconds, cfg.Experiment.ProgressLogSeconds)
+		slog.Info("experiment window", "component", "experiment",
+			"duration_s", cfg.Experiment.DurationSeconds,
+			"progress_log_s", cfg.Experiment.ProgressLogSeconds,
+		)
 	} else {
-		log.Printf("[Experiment] Window=manual-stop progress_log=%ds", cfg.Experiment.ProgressLogSeconds)
+		slog.Info("experiment window", "component", "experiment",
+			"duration_s", "manual-stop",
+			"progress_log_s", cfg.Experiment.ProgressLogSeconds,
+		)
 	}
 
 	redisStore, err := store.NewRedisStore(cfg.Redis.Address, cfg.Redis.DB)
 	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		slog.Error("failed to connect to Redis", "err", err)
+		os.Exit(1)
 	}
-	log.Println("Connected to Redis")
+	slog.Info("connected to Redis")
 
 	appDone := make(chan struct{})
 	pauseCtrl := control.New()
 	session, err := startSimulationSession(redisStore, cfg, pauseCtrl)
 	if err != nil {
-		log.Fatalf("Failed to start simulation session: %v", err)
+		slog.Error("failed to start simulation session", "err", err)
+		os.Exit(1)
 	}
 
 	var stateMu sync.RWMutex
@@ -100,7 +109,7 @@ func main() {
 	webSrv := web.New(redisStore, pauseCtrl, runtimeState, restartFunc, cfg.Web.Port)
 	go webSrv.Start(appDone)
 
-	log.Printf("Distributed Task Scheduler ready. Dashboard -> http://localhost:%d", cfg.Web.Port)
+	slog.Info("scheduler ready", "dashboard", fmt.Sprintf("http://localhost:%d", cfg.Web.Port))
 
 	startedAt := time.Now().UTC()
 	sig := make(chan os.Signal, 1)
@@ -121,7 +130,7 @@ func main() {
 		sessionActive = false
 		durationStopRequested = false
 		stateMu.Unlock()
-		log.Printf("[Experiment] Run finished (%s). Dashboard remains available for restart.", reason)
+		slog.Info("run finished", "component", "experiment", "reason", reason)
 	}
 
 	shutdownProcess := func(reason string) {
@@ -135,7 +144,7 @@ func main() {
 			results.Export(redisStore, cfg, wall)
 		}
 		close(appDone)
-		log.Printf("[Experiment] Shutdown complete (%s)", reason)
+		slog.Info("shutdown complete", "component", "experiment", "reason", reason)
 	}
 
 	for {
@@ -152,7 +161,7 @@ func main() {
 			nextSession, err := startSimulationSession(redisStore, cfg, pauseCtrl)
 			if err != nil {
 				reply <- err
-				log.Printf("[Experiment] Restart failed: %v", err)
+				slog.Error("restart failed", "component", "experiment", "err", err)
 				continue
 			}
 
@@ -163,7 +172,7 @@ func main() {
 			durationStopRequested = false
 			stateMu.Unlock()
 			reply <- nil
-			log.Printf("[Experiment] Restart complete. New run started at %s", startedAt.Format(time.RFC3339))
+			slog.Info("restart complete", "component", "experiment", "started_at", startedAt.Format(time.RFC3339))
 		case <-progressTicker.C:
 			stateMu.RLock()
 			active := sessionActive
@@ -173,7 +182,7 @@ func main() {
 			}
 			snapshot, err := collectExperimentSnapshot(redisStore)
 			if err != nil {
-				log.Printf("[Experiment] Progress snapshot failed: %v", err)
+				slog.Error("progress snapshot failed", "component", "experiment", "err", err)
 				continue
 			}
 			phase := "running"
@@ -196,20 +205,20 @@ func main() {
 				durationStopRequested = true
 				stateMu.Unlock()
 				session.StopGeneration()
-				log.Printf("[Experiment] Generation stop requested after %s", pauseCtrl.ActiveElapsed(startedAt).Round(time.Second))
+				slog.Info("generation stop requested", "component", "experiment", "elapsed", pauseCtrl.ActiveElapsed(startedAt).Round(time.Second))
 			}
 
 			snapshot, err := collectExperimentSnapshot(redisStore)
 			if err != nil {
-				log.Printf("[Experiment] Drain snapshot failed: %v", err)
+				slog.Error("drain snapshot failed", "component", "experiment", "err", err)
 				continue
 			}
 			if stopped && experimentDrained(snapshot) {
-				log.Printf("[Experiment] Drain complete after %s", pauseCtrl.ActiveElapsed(startedAt).Round(time.Second))
+				slog.Info("drain complete", "component", "experiment", "elapsed", pauseCtrl.ActiveElapsed(startedAt).Round(time.Second))
 				finishSession("completed")
 			}
 		case <-sig:
-			log.Printf("[Experiment] Interrupt received after %s", pauseCtrl.ActiveElapsed(startedAt).Round(time.Second))
+			slog.Info("interrupt received", "component", "experiment", "elapsed", pauseCtrl.ActiveElapsed(startedAt).Round(time.Second))
 			shutdownProcess("interrupted")
 			return
 		}

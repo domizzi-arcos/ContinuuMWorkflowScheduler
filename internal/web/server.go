@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -169,12 +169,12 @@ func (s *Server) Start(done <-chan struct{}) {
 	go s.broadcaster(done)
 
 	addr := fmt.Sprintf(":%d", s.port)
-	log.Printf("[Web] Dashboard -> http://localhost%s", addr)
+	slog.Info("web dashboard started", "component", "web", "addr", fmt.Sprintf("http://localhost%s", addr))
 
 	httpSrv := &http.Server{Addr: addr, Handler: s.router}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[Web] Server error: %v", err)
+			slog.Error("web server error", "component", "web", "err", err)
 		}
 	}()
 
@@ -182,7 +182,7 @@ func (s *Server) Start(done <-chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	httpSrv.Shutdown(ctx)
-	log.Println("[Web] Stopped")
+	slog.Info("web server stopped", "component", "web")
 }
 
 func (s *Server) broadcaster(done <-chan struct{}) {

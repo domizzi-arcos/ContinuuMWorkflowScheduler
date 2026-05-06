@@ -1,7 +1,7 @@
 package workflow
 
 import (
-	"log"
+	"log/slog"
 
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/control"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
@@ -31,7 +31,7 @@ func NewTracker(s *store.RedisStore, completed <-chan string, ready chan<- strin
 // enters the event loop.
 func (t *Tracker) Start(done <-chan struct{}) {
 	t.bootstrap(done)
-	log.Println("[Tracker] Started — watching for dependency resolution")
+	slog.Info("tracker started", "component", "tracker")
 	for {
 		select {
 		case execID, ok := <-t.completedExec:
@@ -39,12 +39,12 @@ func (t *Tracker) Start(done <-chan struct{}) {
 				return
 			}
 			if t.control != nil && !t.control.Wait(done) {
-				log.Println("[Tracker] Stopped")
+				slog.Info("tracker stopped", "component", "tracker")
 				return
 			}
 			t.handleDone(execID, done)
 		case <-done:
-			log.Println("[Tracker] Stopped")
+			slog.Info("tracker stopped", "component", "tracker")
 			return
 		}
 	}
@@ -55,7 +55,7 @@ func (t *Tracker) Start(done <-chan struct{}) {
 func (t *Tracker) bootstrap(done <-chan struct{}) {
 	executions, err := t.store.GetAllExecutions()
 	if err != nil {
-		log.Printf("[Tracker] Bootstrap scan failed: %v", err)
+		slog.Error("bootstrap scan failed", "component", "tracker", "err", err)
 		return
 	}
 	promoted := 0
@@ -67,7 +67,7 @@ func (t *Tracker) bootstrap(done <-chan struct{}) {
 			continue
 		}
 		if err := t.store.PromoteExecution(exec.ID); err != nil {
-			log.Printf("[Tracker] Bootstrap promote %s: %v", exec.ID, err)
+			slog.Error("bootstrap promote failed", "component", "tracker", "execution_id", exec.ID, "err", err)
 			continue
 		}
 		select {
@@ -78,7 +78,7 @@ func (t *Tracker) bootstrap(done <-chan struct{}) {
 		}
 	}
 	if promoted > 0 {
-		log.Printf("[Tracker] Bootstrap promoted %d executions to PENDING", promoted)
+		slog.Info("bootstrap promoted executions to PENDING", "component", "tracker", "count", promoted)
 	}
 }
 
@@ -87,7 +87,7 @@ func (t *Tracker) bootstrap(done <-chan struct{}) {
 func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 	exec, err := t.store.GetExecution(execID)
 	if err != nil {
-		log.Printf("[Tracker] GetExecution %s: %v", execID, err)
+		slog.Error("GetExecution failed", "component", "tracker", "execution_id", execID, "err", err)
 		return
 	}
 	if exec.WorkflowID == "" {
@@ -96,13 +96,13 @@ func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 
 	wi, err := t.store.GetWorkflowInstance(exec.WorkflowID)
 	if err != nil {
-		log.Printf("[Tracker] GetWorkflowInstance %s: %v", exec.WorkflowID, err)
+		slog.Error("GetWorkflowInstance failed", "component", "tracker", "workflow_id", exec.WorkflowID, "err", err)
 		return
 	}
 
 	tmpl, ok := TemplateByName(wi.TemplateName)
 	if !ok {
-		log.Printf("[Tracker] Unknown template %q for workflow %s", wi.TemplateName, wi.ID)
+		slog.Error("unknown template", "component", "tracker", "template", wi.TemplateName, "workflow_id", wi.ID)
 		return
 	}
 
@@ -122,7 +122,7 @@ func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 		downstreamExecID := wi.SlotExecIDs[slot.ID]
 		downstream, err := t.store.GetExecution(downstreamExecID)
 		if err != nil {
-			log.Printf("[Tracker] GetExecution downstream %s: %v", downstreamExecID, err)
+			slog.Error("GetExecution downstream failed", "component", "tracker", "execution_id", downstreamExecID, "err", err)
 			allDone = false
 			continue
 		}
@@ -140,12 +140,12 @@ func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 		}
 
 		if err := t.store.PromoteExecution(downstreamExecID); err != nil {
-			log.Printf("[Tracker] PromoteExecution %s: %v", downstreamExecID, err)
+			slog.Error("PromoteExecution failed", "component", "tracker", "execution_id", downstreamExecID, "err", err)
 			continue
 		}
 
-		log.Printf("[Tracker] Promoted exec=%-12s slot=%s wf=%s priority=%d → PENDING",
-			downstreamExecID, slot.ID, wi.ID, wi.Priority)
+		slog.Info("execution promoted to PENDING", "component", "tracker",
+			"execution_id", downstreamExecID, "slot_id", slot.ID, "workflow_id", wi.ID, "priority", wi.Priority)
 
 		select {
 		case t.readyExec <- downstreamExecID:
@@ -156,10 +156,10 @@ func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 
 	if allDone {
 		if err := t.store.MarkWorkflowDone(wi.ID); err != nil {
-			log.Printf("[Tracker] MarkWorkflowDone %s: %v", wi.ID, err)
+			slog.Error("MarkWorkflowDone failed", "component", "tracker", "workflow_id", wi.ID, "err", err)
 		} else {
-			log.Printf("[Tracker] Workflow DONE wf=%-30s template=%s priority=%d",
-				wi.ID, wi.TemplateName, wi.Priority)
+			slog.Info("workflow completed", "component", "tracker",
+				"workflow_id", wi.ID, "template", wi.TemplateName, "priority", wi.Priority)
 		}
 	}
 }
@@ -167,7 +167,7 @@ func (t *Tracker) handleDone(execID string, done <-chan struct{}) {
 func (t *Tracker) allDepsDone(depExecIDs []string) bool {
 	done, err := t.store.AllExecutionsDone(depExecIDs)
 	if err != nil {
-		log.Printf("[Tracker] AllExecutionsDone: %v", err)
+		slog.Error("AllExecutionsDone failed", "component", "tracker", "err", err)
 		return false
 	}
 	return done

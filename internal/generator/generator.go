@@ -2,7 +2,7 @@ package generator
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -62,24 +62,24 @@ func New(
 
 // Start instantiates workflow instances in a round-robin loop until stopped.
 func (g *Generator) Start(done <-chan struct{}) {
-	log.Printf("[Generator] Started — templates=%d tasks=%d interval=%s",
-		len(g.templates), len(g.tasks), workflowSubmissionInterval)
+	slog.Info("generator started", "component", "generator",
+		"templates", len(g.templates), "tasks", len(g.tasks), "interval", workflowSubmissionInterval)
 
 	created := 0
 	for {
 		if g.control != nil && !g.control.Wait(done) {
-			log.Printf("[Generator] Stopped after %d workflow instances", created)
+			slog.Info("generator stopped", "component", "generator", "workflows_created", created)
 			return
 		}
 
 		if err := g.instantiateWorkflow(done); err != nil {
-			log.Printf("[Generator] instantiateWorkflow: %v", err)
+			slog.Error("instantiateWorkflow failed", "component", "generator", "err", err)
 		} else {
 			created++
 		}
 
 		if !g.sleep(done, workflowSubmissionInterval) {
-			log.Printf("[Generator] Stopped after %d workflow instances", created)
+			slog.Info("generator stopped", "component", "generator", "workflows_created", created)
 			return
 		}
 	}
@@ -174,8 +174,8 @@ func (g *Generator) instantiateWorkflow(done <-chan struct{}) error {
 		}
 	}
 
-	log.Printf("[Generator] Workflow instance wf=%s template=%-12s priority=%d slots=%d",
-		wfID, tmpl.Name, priority, len(tmpl.Slots))
+	slog.Debug("workflow instance created", "component", "generator",
+		"wf_id", wfID, "template", tmpl.Name, "priority", priority, "slots", len(tmpl.Slots))
 	return nil
 }
 

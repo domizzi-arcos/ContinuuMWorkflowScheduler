@@ -3,7 +3,7 @@ package results
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
@@ -63,17 +63,17 @@ type WorkflowSummary struct {
 func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration) {
 	tasks, err := s.GetAllTaskResults()
 	if err != nil {
-		log.Printf("[Exporter] Failed to load task results: %v", err)
+		slog.Error("failed to load task results", "component", "exporter", "err", err)
 		return
 	}
 	workflows, err := s.GetAllWorkflowInstances()
 	if err != nil {
-		log.Printf("[Exporter] Failed to load workflow instances: %v", err)
+		slog.Error("failed to load workflow instances", "component", "exporter", "err", err)
 		return
 	}
 	servers, err := s.GetAllServers()
 	if err != nil {
-		log.Printf("[Exporter] Failed to load servers: %v", err)
+		slog.Error("failed to load servers", "component", "exporter", "err", err)
 		return
 	}
 
@@ -113,7 +113,7 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration)
 	}
 
 	if err := os.MkdirAll("results", 0755); err != nil {
-		log.Printf("[Exporter] Cannot create results/ directory: %v", err)
+		slog.Error("cannot create results/ directory", "component", "exporter", "err", err)
 		return
 	}
 
@@ -126,14 +126,14 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration)
 
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		log.Printf("[Exporter] JSON marshal failed: %v", err)
+		slog.Error("JSON marshal failed", "component", "exporter", "err", err)
 		return
 	}
 	if err := os.WriteFile(filename, data, 0644); err != nil {
-		log.Printf("[Exporter] Write failed: %v", err)
+		slog.Error("write failed", "component", "exporter", "err", err)
 		return
 	}
-	log.Printf("[Exporter] Wrote %d task results and %d workflow results to %s", len(tasks), len(wfSummaries), filename)
+	slog.Info("results exported", "component", "exporter", "tasks", len(tasks), "workflows", len(wfSummaries), "file", filename)
 }
 
 func buildSummary(tasks []*models.TaskResult, workflows []*models.WorkflowInstance, wall time.Duration) ExperimentSummary {

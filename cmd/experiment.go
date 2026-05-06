@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"strconv"
@@ -52,7 +52,7 @@ func envInt(key string, fallback int) int {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Printf("[Experiment] Invalid %s=%q, using %d", key, raw, fallback)
+		slog.Warn("invalid env var, using fallback", "component", "experiment", "key", key, "value", raw, "fallback", fallback)
 		return fallback
 	}
 	return value
@@ -155,34 +155,32 @@ func logExperimentProgress(elapsed time.Duration, phase string, snapshot *experi
 	fog := snapshot.Tiers["FOG"]
 	cloud := snapshot.Tiers["CLOUD"]
 
-	log.Printf(
-		"[Experiment] phase=%s elapsed=%s task_defs=%d executions=%d blocked=%d pending=%d queued=%d running=%d done=%d results=%d tier_completed={edge=%d fog=%d cloud=%d}",
-		phase,
-		elapsed,
-		snapshot.TaskDefinitions,
-		snapshot.Executions,
-		snapshot.BlockedExecutions,
-		snapshot.PendingExecutions,
-		snapshot.QueuedExecutions,
-		snapshot.RunningExecutions,
-		snapshot.DoneExecutions,
-		snapshot.Results,
-		edge.CompletedTasks,
-		fog.CompletedTasks,
-		cloud.CompletedTasks,
+	slog.Info("experiment progress", "component", "experiment",
+		"phase", phase, "elapsed", elapsed,
+		"task_defs", snapshot.TaskDefinitions,
+		"executions", snapshot.Executions,
+		"blocked", snapshot.BlockedExecutions,
+		"pending", snapshot.PendingExecutions,
+		"queued", snapshot.QueuedExecutions,
+		"running", snapshot.RunningExecutions,
+		"done", snapshot.DoneExecutions,
+		"results", snapshot.Results,
+		"edge_completed", edge.CompletedTasks,
+		"fog_completed", fog.CompletedTasks,
+		"cloud_completed", cloud.CompletedTasks,
 	)
 }
 
 func logExperimentSummary(s *store.RedisStore, activeWall time.Duration, reason string) {
 	snapshot, err := collectExperimentSnapshot(s)
 	if err != nil {
-		log.Printf("[Experiment] Summary unavailable: %v", err)
+		slog.Error("summary unavailable", "component", "experiment", "err", err)
 		return
 	}
 
 	results, err := s.GetAllTaskResults()
 	if err != nil {
-		log.Printf("[Experiment] Could not reload task results for summary: %v", err)
+		slog.Error("could not reload task results for summary", "component", "experiment", "err", err)
 		results = nil
 	}
 
@@ -192,54 +190,47 @@ func logExperimentSummary(s *store.RedisStore, activeWall time.Duration, reason 
 		wallSeconds = 1
 	}
 
-	log.Printf(
-		"[Experiment] SUMMARY reason=%s wall=%s task_defs=%d executions=%d completed=%d in_flight=%d results=%d throughput={executions=%.2f/s}",
-		reason,
-		wall.Round(time.Second),
-		snapshot.TaskDefinitions,
-		snapshot.Executions,
-		snapshot.DoneExecutions,
-		snapshot.PendingExecutions+snapshot.QueuedExecutions+snapshot.RunningExecutions,
-		snapshot.Results,
-		float64(snapshot.Results)/wallSeconds,
+	slog.Info("experiment summary", "component", "experiment",
+		"reason", reason,
+		"wall", wall.Round(time.Second),
+		"task_defs", snapshot.TaskDefinitions,
+		"executions", snapshot.Executions,
+		"completed", snapshot.DoneExecutions,
+		"in_flight", snapshot.PendingExecutions+snapshot.QueuedExecutions+snapshot.RunningExecutions,
+		"results", snapshot.Results,
+		"throughput_per_s", fmt.Sprintf("%.2f", float64(snapshot.Results)/wallSeconds),
 	)
 
-	log.Printf(
-		"[Experiment] EXECUTIONS pending=%d queued=%d running=%d done=%d completion=%.1f%%",
-		snapshot.PendingExecutions,
-		snapshot.QueuedExecutions,
-		snapshot.RunningExecutions,
-		snapshot.DoneExecutions,
-		completionRate(snapshot),
+	slog.Info("execution breakdown", "component", "experiment",
+		"pending", snapshot.PendingExecutions,
+		"queued", snapshot.QueuedExecutions,
+		"running", snapshot.RunningExecutions,
+		"done", snapshot.DoneExecutions,
+		"completion_pct", fmt.Sprintf("%.1f", completionRate(snapshot)),
 	)
 
 	for _, tierName := range []string{"EDGE", "FOG", "CLOUD"} {
 		tier := snapshot.Tiers[tierName]
-		log.Printf(
-			"[Experiment] TIER %s nodes=%d completed=%d active=%d cpu=%d/%d mem=%d/%dMB disk=%d/%dGB",
-			tierName,
-			tier.Nodes,
-			tier.CompletedTasks,
-			tier.ActiveTasks,
-			tier.UsedCPU,
-			tier.MaxCPU,
-			tier.UsedMemory,
-			tier.MaxMemory,
-			tier.UsedDisk,
-			tier.MaxDisk,
+		slog.Info("tier stats", "component", "experiment",
+			"tier", tierName,
+			"nodes", tier.Nodes,
+			"completed", tier.CompletedTasks,
+			"active", tier.ActiveTasks,
+			"cpu", fmt.Sprintf("%d/%d", tier.UsedCPU, tier.MaxCPU),
+			"mem_mb", fmt.Sprintf("%d/%d", tier.UsedMemory, tier.MaxMemory),
+			"disk_gb", fmt.Sprintf("%d/%d", tier.UsedDisk, tier.MaxDisk),
 		)
 	}
 
 	durations := computeTaskDurations(results)
 	if len(durations) > 0 {
-		log.Printf(
-			"[Experiment] LATENCY count=%d min=%s p50=%s p95=%s avg=%s max=%s",
-			len(durations),
-			formatDuration(durations[0]),
-			formatDuration(percentileDuration(durations, 0.50)),
-			formatDuration(percentileDuration(durations, 0.95)),
-			formatDuration(averageDuration(durations)),
-			formatDuration(durations[len(durations)-1]),
+		slog.Info("latency stats", "component", "experiment",
+			"count", len(durations),
+			"min", formatDuration(durations[0]),
+			"p50", formatDuration(percentileDuration(durations, 0.50)),
+			"p95", formatDuration(percentileDuration(durations, 0.95)),
+			"avg", formatDuration(averageDuration(durations)),
+			"max", formatDuration(durations[len(durations)-1]),
 		)
 	}
 
@@ -248,7 +239,7 @@ func logExperimentSummary(s *store.RedisStore, activeWall time.Duration, reason 
 		for _, server := range snapshot.TopServers {
 			parts = append(parts, fmt.Sprintf("%s/%s(%d done)", server.Type, server.ID, server.CompletedTasks))
 		}
-		log.Printf("[Experiment] TOP_SERVERS %s", strings.Join(parts, ", "))
+		slog.Info("top servers", "component", "experiment", "servers", strings.Join(parts, ", "))
 	}
 }
 

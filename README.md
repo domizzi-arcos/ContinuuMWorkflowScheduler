@@ -46,6 +46,7 @@ Key runtime components:
   - `random`
   - `best_fit`
   - `worst_fit`
+  - `topsis`
 - Configurable server topology, task workload, and runtime behavior.
 - Dashboard with pause/resume and restart controls.
 - Redis state inspection.
@@ -118,11 +119,17 @@ Set environment variables as needed:
 
 ## Scheduling Algorithms
 
-The scheduler implements four policies:
-- `round_robin` — cycles through servers in order.
-- `random` — selects a valid server at random.
-- `best_fit` — packs tasks into the server with the tightest fit.
-- `worst_fit` — spreads workload by choosing the server with the most free capacity.
+The scheduler implements five policies:
+
+| Algorithm | Strategy |
+|---|---|
+| `round_robin` | Cycles through candidate servers in sorted ID order. |
+| `random` | Selects a capable server uniformly at random (seeded for reproducibility). |
+| `best_fit` | Packs tasks onto the server with the least remaining free capacity. |
+| `worst_fit` | Spreads load by choosing the server with the most remaining free capacity. |
+| `topsis` | Multi-criteria ranking (TOPSIS method) scoring each server on estimated execution time, monetary cost, and energy consumption. Weights are configurable. |
+
+`FreeCapacity` is computed as `(MaxCPU − UsedCPU) + (MaxMemory − UsedMemory)/100 + (MaxDisk − UsedDisk)`.
 
 The algorithm is configured in `config.yaml`.
 
@@ -143,12 +150,31 @@ The dashboard provides:
 - pause/resume controls
 - restart control after a run ends
 
+## Testing
+
+Unit tests cover all five scheduling algorithms in `internal/scheduler/`:
+
+```sh
+go test ./internal/scheduler/...
+```
+
+Each algorithm has a dedicated `*_test.go` file with table-driven tests for empty inputs, single-candidate passthrough, and algorithm-specific selection invariants (packing order, cycle rotation, seed determinism, TOPSIS dominance and weight bias).
+
+The `cmd/` package contains integration-style tests for server seeding (`server_seed_test.go`).
+
+To run the full suite:
+
+```sh
+go test ./...
+```
+
 ## Development Notes
 
 - The application uses Redis for persistence and RabbitMQ for task/result message delivery.
+- Ephemeral Redis keys (`execution:*`, `result:*`, `workflow:*`) carry a 2-hour TTL; static definition keys (`task:*`, `server:*`) have no TTL.
 - Tasks are generated with a target tier based on duration thresholds and available server tiers.
 - Workers simulate real-world latency by adding server WAN latency to task duration.
-- The app logs experiment progress, state changes, and scheduling events.
+- The app logs to stdout using Go's structured `log/slog` package. Log level defaults to `DEBUG`; each message carries structured fields (algorithm, server, execution ID, etc.).
 
 ## Dependencies
 

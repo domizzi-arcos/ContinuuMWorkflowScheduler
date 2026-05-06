@@ -19,6 +19,7 @@ type RedisStore struct {
 }
 
 const optimisticWriteRetries = 16
+const executionTTL = 2 * time.Hour
 
 var errInsufficientCapacity = errors.New("insufficient server capacity")
 
@@ -132,7 +133,7 @@ func (s *RedisStore) CreateExecution(taskID string, createdAt time.Time) (*model
 	if err != nil {
 		return nil, err
 	}
-	if err := s.client.Set(ctx, "execution:"+execution.ID, data, 0).Err(); err != nil {
+	if err := s.client.Set(ctx, "execution:"+execution.ID, data, executionTTL).Err(); err != nil {
 		return nil, err
 	}
 	return execution, nil
@@ -167,7 +168,7 @@ func (s *RedisStore) StoreExecution(exec *models.Execution) error {
 	if err != nil {
 		return err
 	}
-	return s.client.Set(context.Background(), "execution:"+exec.ID, data, 0).Err()
+	return s.client.Set(context.Background(), "execution:"+exec.ID, data, executionTTL).Err()
 }
 
 // PromoteExecution transitions a BLOCKED execution to PENDING.
@@ -353,7 +354,7 @@ func (s *RedisStore) StoreTaskResult(r *models.TaskResult) error {
 	if err != nil {
 		return err
 	}
-	return s.client.Set(context.Background(), "result:"+r.ExecutionID, data, 0).Err()
+	return s.client.Set(context.Background(), "result:"+r.ExecutionID, data, executionTTL).Err()
 }
 
 func (s *RedisStore) GetTaskResult(executionID string) (*models.TaskResult, error) {
@@ -399,7 +400,7 @@ func (s *RedisStore) StoreWorkflowInstance(wi *models.WorkflowInstance) error {
 	if err != nil {
 		return err
 	}
-	return s.client.Set(context.Background(), "workflow:"+wi.ID, data, 0).Err()
+	return s.client.Set(context.Background(), "workflow:"+wi.ID, data, executionTTL).Err()
 }
 
 func (s *RedisStore) GetWorkflowInstance(id string) (*models.WorkflowInstance, error) {
@@ -584,7 +585,7 @@ func (s *RedisStore) updateExecution(executionID string, mutate func(*models.Exe
 				return err
 			}
 			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				pipe.Set(ctx, key, payload, 0)
+				pipe.Set(ctx, key, payload, executionTTL)
 				return nil
 			})
 			return err

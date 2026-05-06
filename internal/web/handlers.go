@@ -2,7 +2,7 @@ package web
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"time"
@@ -109,12 +109,12 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Paused {
 			snapshot := s.control.Pause()
-			log.Printf("[Control] Simulation paused from dashboard")
+			slog.Info("simulation paused from dashboard", "component", "control")
 			jsonOK(w, snapshot)
 			return
 		}
 		snapshot := s.control.Resume()
-		log.Printf("[Control] Simulation resumed from dashboard")
+		slog.Info("simulation resumed from dashboard", "component", "control")
 		jsonOK(w, snapshot)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -127,11 +127,11 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.restart(); err != nil {
-		log.Printf("[Control] Simulation restart failed: %v", err)
+		slog.Error("simulation restart failed", "component", "control", "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[Control] Simulation restarted from dashboard")
+	slog.Info("simulation restarted from dashboard", "component", "control")
 	if s.control == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return

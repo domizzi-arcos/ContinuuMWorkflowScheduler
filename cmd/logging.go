@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +13,7 @@ import (
 func setupExperimentLogging() (func(), string, error) {
 	logDir := strings.TrimSpace(os.Getenv("EXPERIMENT_LOG_DIR"))
 	if logDir == "" {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		return func() {}, "", nil
 	}
 
@@ -26,7 +27,8 @@ func setupExperimentLogging() (func(), string, error) {
 		return nil, "", fmt.Errorf("open log file %s: %w", logPath, err)
 	}
 
-	log.SetOutput(io.MultiWriter(os.Stdout, file))
+	handler := slog.NewTextHandler(io.MultiWriter(os.Stdout, file), &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(handler))
 
 	return func() {
 		file.Close()

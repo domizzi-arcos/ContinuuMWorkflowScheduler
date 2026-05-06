@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -106,7 +106,7 @@ func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *
 		tracker.Start(session.done)
 	}()
 
-	log.Printf("[Session] Simulation session started with %d seeded tasks", len(tasks))
+	slog.Info("simulation session started", "component", "session", "task_count", len(tasks))
 	return session, nil
 }
 
@@ -119,7 +119,7 @@ func connectBrokerWithRetry(url string) (*broker.Broker, error) {
 		b, err := broker.NewBroker(url)
 		if err == nil {
 			if attempt > 1 {
-				log.Printf("[Session] RabbitMQ became available after %d attempts", attempt)
+				slog.Info("RabbitMQ became available", "component", "session", "attempts", attempt)
 			}
 			return b, nil
 		}
@@ -134,7 +134,7 @@ func connectBrokerWithRetry(url string) (*broker.Broker, error) {
 		if wait > remaining {
 			wait = remaining
 		}
-		log.Printf("[Session] RabbitMQ not ready (attempt %d): %v. Retrying in %s", attempt, err, wait.Round(time.Second))
+		slog.Warn("RabbitMQ not ready, retrying", "component", "session", "attempt", attempt, "err", err, "retry_in", wait.Round(time.Second))
 		time.Sleep(wait)
 		attempt++
 	}
@@ -160,13 +160,13 @@ func (s *simulationSession) StopAll() {
 		close(s.done)
 		if s.worker != nil {
 			if !s.worker.WaitWithTimeout(5 * time.Second) {
-				log.Println("[Session] Warning: worker drain timed out after 5s")
+				slog.Warn("worker drain timed out", "component", "session", "timeout", "5s")
 			}
 		}
 		s.wg.Wait()
 		if s.broker != nil {
 			s.broker.Close()
 		}
-		log.Println("[Session] Simulation session stopped")
+		slog.Info("simulation session stopped", "component", "session")
 	})
 }

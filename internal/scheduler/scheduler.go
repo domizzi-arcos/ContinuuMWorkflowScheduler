@@ -2,7 +2,7 @@ package scheduler
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -69,7 +69,7 @@ func (s *Scheduler) Start(done <-chan struct{}) {
 	ticker := time.NewTicker(s.poll)
 	defer ticker.Stop()
 	s.bootstrapActiveExecutions()
-	log.Printf("[Scheduler] Started — algorithm=%s poll=%s", s.algorithm.Name(), s.poll)
+	slog.Info("scheduler started", "component", "scheduler", "algorithm", s.algorithm.Name(), "poll", s.poll)
 
 	for {
 		select {
@@ -81,12 +81,12 @@ func (s *Scheduler) Start(done <-chan struct{}) {
 			s.trackExecution(executionID)
 		case <-ticker.C:
 			if s.control != nil && !s.control.Wait(done) {
-				log.Println("[Scheduler] Stopped")
+				slog.Info("scheduler stopped", "component", "scheduler")
 				return
 			}
 			s.dispatch(done)
 		case <-done:
-			log.Println("[Scheduler] Stopped")
+			slog.Info("scheduler stopped", "component", "scheduler")
 			return
 		}
 	}
@@ -100,7 +100,7 @@ func (s *Scheduler) dispatch(done <-chan struct{}) {
 
 	servers, err := s.store.GetAllServers()
 	if err != nil {
-		log.Printf("[Scheduler] Error fetching servers: %v", err)
+		slog.Error("error fetching servers", "component", "scheduler", "err", err)
 		return
 	}
 
@@ -112,7 +112,7 @@ func (s *Scheduler) dispatch(done <-chan struct{}) {
 	for _, id := range executionIDs {
 		exec, err := s.store.GetExecution(id)
 		if err != nil {
-			log.Printf("[Scheduler] Error fetching execution %s: %v", id, err)
+			slog.Error("error fetching execution", "component", "scheduler", "execution_id", id, "err", err)
 			s.untrackExecution(id)
 			continue
 		}
@@ -141,7 +141,7 @@ func (s *Scheduler) dispatch(done <-chan struct{}) {
 func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.Server, done <-chan struct{}) {
 	task, err := s.store.GetTask(execution.TaskID)
 	if err != nil {
-		log.Printf("[Scheduler] Error fetching task %s for execution %s: %v", execution.TaskID, execution.ID, err)
+		slog.Error("error fetching task", "component", "scheduler", "task_id", execution.TaskID, "execution_id", execution.ID, "err", err)
 		s.untrackExecution(execution.ID)
 		return
 	}
@@ -150,7 +150,7 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 	if len(candidates) == 0 {
 		retries := s.incrementRetry(execution.ID)
 		if retries == 1 {
-			log.Printf("[Scheduler] No capacity for execution=%s task=%s target=%s — will retry", execution.ID, task.ID, task.TargetTier)
+			slog.Debug("no capacity, will retry", "component", "scheduler", "execution_id", execution.ID, "task_id", task.ID, "target_tier", task.TargetTier)
 		}
 		return
 	}
@@ -162,7 +162,7 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 
 	reservedServer, reserved, err := s.store.ReserveServerResources(srv.ID, task.CPU, task.Memory, task.Disk)
 	if err != nil {
-		log.Printf("[Scheduler] Error reserving server %s: %v", srv.ID, err)
+		slog.Error("error reserving server", "component", "scheduler", "server_id", srv.ID, "err", err)
 		return
 	}
 	if reservedServer != nil {
@@ -171,16 +171,16 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 	if !reserved {
 		retries := s.incrementRetry(execution.ID)
 		if retries == 1 {
-			log.Printf("[Scheduler] No capacity for execution=%s task=%s on %s after refresh — will retry", execution.ID, task.ID, srv.ID)
+			slog.Debug("no capacity after refresh, will retry", "component", "scheduler", "execution_id", execution.ID, "task_id", task.ID, "server_id", srv.ID)
 		}
 		return
 	}
 
 	if err := s.store.AssignExecution(execution.ID, srv.ID, "QUEUED"); err != nil {
-		log.Printf("[Scheduler] Error assigning execution %s: %v", execution.ID, err)
+		slog.Error("error assigning execution", "component", "scheduler", "execution_id", execution.ID, "err", err)
 		rolledBack, releaseErr := s.store.ReleaseServerResources(srv.ID, task.CPU, task.Memory, task.Disk, false)
 		if releaseErr != nil {
-			log.Printf("[Scheduler] Error rolling back server %s after assign failure: %v", srv.ID, releaseErr)
+			slog.Error("error rolling back server after assign failure", "component", "scheduler", "server_id", srv.ID, "err", releaseErr)
 		} else if rolledBack != nil {
 			updateLocal(servers, rolledBack)
 		}
@@ -195,13 +195,13 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 	body, _ := json.Marshal(msg)
 	routingKey := strings.ToLower(srv.Type)
 	if err := s.broker.PublishTask(routingKey, body); err != nil {
-		log.Printf("[Scheduler] Publish error for execution=%s: %v", execution.ID, err)
+		slog.Error("publish error", "component", "scheduler", "execution_id", execution.ID, "err", err)
 		if revertErr := s.store.RevertExecutionAssignment(execution.ID); revertErr != nil {
-			log.Printf("[Scheduler] Error reverting execution assignment for %s: %v", execution.ID, revertErr)
+			slog.Error("error reverting execution assignment", "component", "scheduler", "execution_id", execution.ID, "err", revertErr)
 		}
 		rolledBack, releaseErr := s.store.ReleaseServerResources(srv.ID, task.CPU, task.Memory, task.Disk, false)
 		if releaseErr != nil {
-			log.Printf("[Scheduler] Error rolling back server %s after publish failure: %v", srv.ID, releaseErr)
+			slog.Error("error rolling back server after publish failure", "component", "scheduler", "server_id", srv.ID, "err", releaseErr)
 		} else if rolledBack != nil {
 			updateLocal(servers, rolledBack)
 		}
@@ -209,30 +209,20 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 	}
 
 	retries := s.resetRetry(execution.ID)
-	if retries > 0 {
-		log.Printf(
-			"[Scheduler] %-12s exec=%-12s task=%-10s %-24s priority=%d target=%s -> %s (after %d retries)",
-			s.algorithm.Name(),
-			execution.ID,
-			task.ID,
-			task.Name,
-			execution.Priority,
-			task.TargetTier,
-			srv.ID,
-			retries,
-		)
-	} else {
-		log.Printf(
-			"[Scheduler] %-12s exec=%-12s task=%-10s %-24s priority=%d target=%s -> %s",
-			s.algorithm.Name(),
-			execution.ID,
-			task.ID,
-			task.Name,
-			execution.Priority,
-			task.TargetTier,
-			srv.ID,
-		)
+	attrs := []any{
+		"component", "scheduler",
+		"algorithm", s.algorithm.Name(),
+		"execution_id", execution.ID,
+		"task_id", task.ID,
+		"task_name", task.Name,
+		"priority", execution.Priority,
+		"target_tier", task.TargetTier,
+		"server_id", srv.ID,
 	}
+	if retries > 0 {
+		attrs = append(attrs, "retries", retries)
+	}
+	slog.Debug("execution dispatched", attrs...)
 }
 
 func filterByCapacity(task *models.Task, servers []*models.Server) []*models.Server {
@@ -257,7 +247,7 @@ func updateLocal(servers []*models.Server, updated *models.Server) {
 func (s *Scheduler) bootstrapActiveExecutions() {
 	executions, err := s.store.GetAllExecutions()
 	if err != nil {
-		log.Printf("[Scheduler] Error bootstrapping executions: %v", err)
+		slog.Error("error bootstrapping executions", "component", "scheduler", "err", err)
 		return
 	}
 	for _, execution := range executions {

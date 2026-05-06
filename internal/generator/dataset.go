@@ -4,7 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/rand"
 	"os"
 	"strconv"
@@ -130,8 +130,8 @@ func LoadTasksFromCSV(path string, count int, seed int64) ([]*models.Task, error
 		}
 		tierCounts[row.tier]++
 	}
-	log.Printf("[Seeder] Loaded %d tasks from dataset — EDGE:%d FOG:%d CLOUD:%d (scanned %d rows)",
-		len(tasks), tierCounts["EDGE"], tierCounts["FOG"], tierCounts["CLOUD"], rowNum)
+	slog.Info("tasks loaded from dataset", "component", "seeder",
+		"count", len(tasks), "edge", tierCounts["EDGE"], "fog", tierCounts["FOG"], "cloud", tierCounts["CLOUD"], "rows_scanned", rowNum)
 	return tasks, nil
 }
 

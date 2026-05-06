@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -57,7 +57,7 @@ func (w *Worker) StartAll(done <-chan struct{}) {
 			w.consumeTier(queue, tag, done)
 		}(t.queue, t.tag)
 	}
-	log.Println("[Worker] Started consumers for edge / fog / cloud queues")
+	slog.Info("started consumers for edge/fog/cloud queues", "component", "worker")
 }
 
 func (w *Worker) Wait() {
@@ -83,7 +83,7 @@ func (w *Worker) WaitWithTimeout(timeout time.Duration) bool {
 func (w *Worker) consumeTier(queueName, consumerTag string, done <-chan struct{}) {
 	deliveries, err := w.broker.ConsumeQueue(queueName, consumerTag)
 	if err != nil {
-		log.Printf("[Worker/%s] Failed to start consumer: %v", consumerTag, err)
+		slog.Error("failed to start consumer", "component", "worker", "consumer", consumerTag, "err", err)
 		return
 	}
 	for {
@@ -121,23 +121,23 @@ func (w *Worker) consumeTier(queueName, consumerTag string, done <-chan struct{}
 func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 	var msg models.TaskMessage
 	if err := json.Unmarshal(body, &msg); err != nil {
-		log.Printf("[Worker] Bad message: %v", err)
+		slog.Warn("bad message", "component", "worker", "err", err)
 		return errBadMessage
 	}
 
 	execution, err := w.store.GetExecution(msg.ExecutionID)
 	if err != nil {
-		log.Printf("[Worker] Execution %s not found: %v", msg.ExecutionID, err)
+		slog.Error("execution not found", "component", "worker", "execution_id", msg.ExecutionID, "err", err)
 		return fmt.Errorf("get execution: %w", err)
 	}
 	task, err := w.store.GetTask(msg.TaskID)
 	if err != nil {
-		log.Printf("[Worker] Task %s not found: %v", msg.TaskID, err)
+		slog.Error("task not found", "component", "worker", "task_id", msg.TaskID, "err", err)
 		return fmt.Errorf("get task: %w", err)
 	}
 	srv, err := w.store.GetServer(msg.ServerID)
 	if err != nil {
-		log.Printf("[Worker] Server %s not found: %v", msg.ServerID, err)
+		slog.Error("server not found", "component", "worker", "server_id", msg.ServerID, "err", err)
 		return fmt.Errorf("get server: %w", err)
 	}
 	if w.control != nil && !w.control.Wait(done) {
@@ -146,18 +146,13 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 
 	startTime := time.Now().UTC()
 	if err := w.store.MarkExecutionRunning(msg.ExecutionID, startTime); err != nil {
-		log.Printf("[Worker] MarkExecutionRunning %s: %v", msg.ExecutionID, err)
+		slog.Error("MarkExecutionRunning failed", "component", "worker", "execution_id", msg.ExecutionID, "err", err)
 	}
 
 	effectiveDuration := time.Duration(task.Duration+srv.Latency) * time.Millisecond
-	log.Printf(
-		"[Worker/%-5s] RUNNING  exec=%-12s task=%-10s %-24s server=%-10s duration=%v",
-		srv.Type,
-		execution.ID,
-		task.ID,
-		task.Name,
-		srv.ID,
-		effectiveDuration,
+	slog.Debug("task running", "component", "worker",
+		"tier", srv.Type, "execution_id", execution.ID, "task_id", task.ID,
+		"task_name", task.Name, "server_id", srv.ID, "duration", effectiveDuration,
 	)
 
 	if w.control != nil {
@@ -184,18 +179,15 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 	}
 
 	if err := w.store.MarkExecutionDone(msg.ExecutionID, endTime); err != nil {
-		log.Printf("[Worker] MarkExecutionDone %s: %v", msg.ExecutionID, err)
+		slog.Error("MarkExecutionDone failed", "component", "worker", "execution_id", msg.ExecutionID, "err", err)
 	}
 	if _, err := w.store.ReleaseServerResources(srv.ID, task.CPU, task.Memory, task.Disk, true); err != nil {
-		log.Printf("[Worker] ReleaseServerResources %s: %v", msg.ExecutionID, err)
+		slog.Error("ReleaseServerResources failed", "component", "worker", "execution_id", msg.ExecutionID, "err", err)
 	}
 
-	log.Printf(
-		"[Worker/%-5s] DONE     exec=%-12s task=%-10s effective=%dms",
-		srv.Type,
-		execution.ID,
-		task.ID,
-		endTime.Sub(startTime).Milliseconds(),
+	slog.Debug("task done", "component", "worker",
+		"tier", srv.Type, "execution_id", execution.ID, "task_id", task.ID,
+		"effective_ms", endTime.Sub(startTime).Milliseconds(),
 	)
 
 	effectiveSec := endTime.Sub(startTime).Seconds()
@@ -226,7 +218,7 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 	}
 	resultBody, _ := json.Marshal(result)
 	if err := w.broker.PublishResult(resultBody); err != nil {
-		log.Printf("[Worker] PublishResult %s: %v", msg.ExecutionID, err)
+		slog.Error("PublishResult failed", "component", "worker", "execution_id", msg.ExecutionID, "err", err)
 	}
 	return nil
 }

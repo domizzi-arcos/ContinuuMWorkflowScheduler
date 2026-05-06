@@ -2,7 +2,7 @@ package results
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/broker"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/control"
@@ -28,10 +28,10 @@ func New(s *store.RedisStore, b *broker.Broker, ctrl *control.Controller, doneEx
 func (c *Collector) Start(done <-chan struct{}) {
 	deliveries, err := c.broker.ConsumeQueue(broker.ResultQueue, "result-collector")
 	if err != nil {
-		log.Printf("[Collector] Failed to start: %v", err)
+		slog.Error("failed to start collector", "component", "collector", "err", err)
 		return
 	}
-	log.Println("[Collector] Consuming from result_queue")
+	slog.Info("consuming from result_queue", "component", "collector")
 
 	for {
 		select {
@@ -45,7 +45,7 @@ func (c *Collector) Start(done <-chan struct{}) {
 			d.Ack(false)
 			c.persist(done, d.Body)
 		case <-done:
-			log.Println("[Collector] Stopped")
+			slog.Info("collector stopped", "component", "collector")
 			return
 		}
 	}
@@ -60,7 +60,7 @@ func (c *Collector) persist(done <-chan struct{}, body []byte) {
 
 	var msg models.ResultMessage
 	if err := json.Unmarshal(body, &msg); err != nil {
-		log.Printf("[Collector] Bad message: %v", err)
+		slog.Warn("bad message", "component", "collector", "err", err)
 		return
 	}
 
@@ -89,7 +89,7 @@ func (c *Collector) persist(done <-chan struct{}, body []byte) {
 	}
 
 	if err := c.store.StoreTaskResult(result); err != nil {
-		log.Printf("[Collector] StoreTaskResult %s: %v", msg.TaskID, err)
+		slog.Error("StoreTaskResult failed", "component", "collector", "task_id", msg.TaskID, "err", err)
 		return
 	}
 
@@ -101,12 +101,9 @@ func (c *Collector) persist(done <-chan struct{}, body []byte) {
 		}
 	}
 
-	log.Printf(
-		"[Collector] Stored result exec=%-12s task=%-10s target=%-5s server=%-10s effective=%dms",
-		msg.ExecutionID,
-		msg.TaskID,
-		msg.TargetTier,
-		msg.ServerID,
-		msg.EffectiveDurationMS,
+	slog.Debug("result stored", "component", "collector",
+		"execution_id", msg.ExecutionID, "task_id", msg.TaskID,
+		"target_tier", msg.TargetTier, "server_id", msg.ServerID,
+		"effective_ms", msg.EffectiveDurationMS,
 	)
 }
