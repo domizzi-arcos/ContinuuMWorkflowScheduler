@@ -19,6 +19,7 @@ type ExperimentResult struct {
 	Summary   ExperimentSummary    `json:"summary"`
 	Tasks     []*models.TaskResult `json:"task_results"`
 	Workflows []*WorkflowSummary   `json:"workflow_results"`
+	Servers   []*ServerSnapshot    `json:"servers"`
 }
 
 type ExperimentMeta struct {
@@ -59,8 +60,15 @@ type WorkflowSummary struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-// Export reads all results from Redis and writes a JSON file to the results/ directory.
-func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration) {
+type ServerSnapshot struct {
+	ID             string `json:"id"`
+	ServerType     string `json:"server_type"`
+	CompletedTasks int    `json:"completed_tasks"`
+	ActiveTasks    int    `json:"active_tasks"`
+}
+
+// Export reads all results from Redis and writes a JSON file to outputDir.
+func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration, outputDir string) {
 	tasks, err := s.GetAllTaskResults()
 	if err != nil {
 		slog.Error("failed to load task results", "component", "exporter", "err", err)
@@ -78,8 +86,15 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration)
 	}
 
 	numServers := map[string]int{"EDGE": 0, "FOG": 0, "CLOUD": 0}
+	serverSnapshots := make([]*ServerSnapshot, 0, len(servers))
 	for _, srv := range servers {
 		numServers[srv.Type]++
+		serverSnapshots = append(serverSnapshots, &ServerSnapshot{
+			ID:             srv.ID,
+			ServerType:     srv.Type,
+			CompletedTasks: srv.CompletedTasks,
+			ActiveTasks:    srv.ActiveTasks,
+		})
 	}
 
 	meta := ExperimentMeta{
@@ -110,15 +125,17 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration)
 		Summary:   summary,
 		Tasks:     tasks,
 		Workflows: wfSummaries,
+		Servers:   serverSnapshots,
 	}
 
-	if err := os.MkdirAll("results", 0755); err != nil {
-		slog.Error("cannot create results/ directory", "component", "exporter", "err", err)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		slog.Error("cannot create output directory", "component", "exporter", "err", err)
 		return
 	}
 
 	ts := time.Now().UTC().Format("20060102_150405")
-	filename := fmt.Sprintf("results/%s_edge%d_fog%d_cloud%d_%s.json",
+	filename := fmt.Sprintf("%s/%s_edge%d_fog%d_cloud%d_%s.json",
+		outputDir,
 		cfg.Scheduler.Algorithm,
 		numServers["EDGE"], numServers["FOG"], numServers["CLOUD"],
 		ts,

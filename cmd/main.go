@@ -124,7 +124,7 @@ func main() {
 		wall := pauseCtrl.ActiveElapsed(startedAt)
 		logExperimentSummary(redisStore, wall, reason)
 		session.StopAll()
-		results.Export(redisStore, cfg, wall)
+		results.Export(redisStore, cfg, wall, "results")
 		pauseCtrl.Reset()
 		stateMu.Lock()
 		sessionActive = false
@@ -141,7 +141,7 @@ func main() {
 		if active {
 			logExperimentSummary(redisStore, wall, reason)
 			session.StopAll()
-			results.Export(redisStore, cfg, wall)
+			results.Export(redisStore, cfg, wall, "results")
 		}
 		close(appDone)
 		slog.Info("shutdown complete", "component", "experiment", "reason", reason)
