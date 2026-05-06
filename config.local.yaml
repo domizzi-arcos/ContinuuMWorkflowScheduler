@@ -1,0 +1,102 @@
+# Local config — use when running outside Docker (redis/rabbitmq mapped to localhost)
+servers:
+  seed: 42
+  edge:
+    count: 3
+    cpu:
+      min: 1
+      max: 2
+    memory:
+      min: 128
+      max: 768
+      step: 128
+    disk:
+      min: 0
+      max: 20
+      step: 1
+    wan_latency:
+      min: 3
+      max: 12
+      step: 1
+    cost_per_hour: 0.02
+    power_watts:
+      min: 10
+      max: 25
+      step: 5
+  fog:
+    count: 3
+    cpu:
+      min: 4
+      max: 8
+    memory:
+      min: 2048
+      max: 8192
+      step: 512
+    disk:
+      min: 40
+      max: 140
+      step: 10
+    wan_latency:
+      min: 20
+      max: 45
+      step: 5
+    cost_per_hour: 0.25
+    power_watts:
+      min: 100
+      max: 200
+      step: 25
+  cloud:
+    count: 3
+    cpu:
+      min: 16
+      max: 32
+      step: 2
+    memory:
+      min: 16384
+      max: 65536
+      step: 4096
+    disk:
+      min: 400
+      max: 1600
+      step: 100
+    wan_latency:
+      min: 80
+      max: 160
+      step: 10
+    cost_per_hour: 1.50
+    power_watts:
+      min: 300
+      max: 600
+      step: 50
+
+scheduler:
+  algorithm: "topsis"
+  seed: 42
+  topsis_weights:
+    time:   0.4
+    cost:   0.3
+    energy: 0.3
+
+generator:
+  task_count: 120
+  seed: 0
+  dataset_path: "globus dataset/GlobusComputeDataset-v1-enriched.csv"
+  edge_max_duration_ms: 2500
+  fog_max_duration_ms: 6500
+  workflow_seed: 42
+  priority_min: 1
+  priority_max: 10
+
+redis:
+  address: "localhost:6379"
+  db: 0
+
+rabbitmq:
+  url: "amqp://guest:guest@localhost:5672/"
+
+web:
+  port: 8080
+
+experiment:
+  duration_seconds: 120
+  progress_log_seconds: 10

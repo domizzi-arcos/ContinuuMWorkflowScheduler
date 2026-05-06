@@ -42,13 +42,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	b, err := connectWithRetry(cfg.RabbitMQ.URL)
-	if err != nil {
-		slog.Error("failed to connect to RabbitMQ", "err", err)
-		os.Exit(1)
-	}
-	defer b.Close()
-
 	outDir := fmt.Sprintf("results/benchmark_%s", time.Now().UTC().Format("20060102_150405"))
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		slog.Error("failed to create output directory", "err", err)
@@ -66,7 +59,7 @@ func main() {
 			"algorithm", algo,
 			"run", fmt.Sprintf("%d/%d", i+1, len(algorithms)),
 		)
-		if err := runAlgorithm(redisStore, b, cfg, algo, *serversPerTier, time.Duration(*duration)*time.Second, outDir); err != nil {
+		if err := runAlgorithm(redisStore, cfg, algo, *serversPerTier, time.Duration(*duration)*time.Second, outDir); err != nil {
 			slog.Error("algorithm run failed", "algorithm", algo, "err", err)
 			os.Exit(1)
 		}
@@ -99,7 +92,6 @@ func (s *benchSession) stopAll() {
 
 func runAlgorithm(
 	s *store.RedisStore,
-	b *broker.Broker,
 	baseCfg *config.Config,
 	algoName string,
 	serversPerTier int,
@@ -112,6 +104,12 @@ func runAlgorithm(
 	cfg.Servers.Fog.Count = serversPerTier
 	cfg.Servers.Cloud.Count = serversPerTier
 	cfg.Experiment.DurationSeconds = int(runDuration.Seconds())
+
+	b, err := connectWithRetry(cfg.RabbitMQ.URL)
+	if err != nil {
+		return fmt.Errorf("connect to RabbitMQ: %w", err)
+	}
+	defer b.Close()
 
 	if err := b.PurgeQueues(); err != nil {
 		return fmt.Errorf("purge queues: %w", err)
