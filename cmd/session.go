@@ -12,6 +12,7 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/generator"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/results"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/scheduler"
+	"github.com/pcturnes/distributed-workflow-scheduler/internal/seeder"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/worker"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/workflow"
@@ -50,7 +51,7 @@ func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *
 		b.Close()
 		return nil, fmt.Errorf("reset Redis data: %w", err)
 	}
-	if err := seedServers(s, cfg); err != nil {
+	if err := seeder.SeedServers(s, cfg); err != nil {
 		b.Close()
 		return nil, fmt.Errorf("seed servers: %w", err)
 	}

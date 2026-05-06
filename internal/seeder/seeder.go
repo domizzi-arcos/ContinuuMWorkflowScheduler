@@ -1,4 +1,4 @@
-package main
+package seeder
 
 import (
 	"fmt"
@@ -32,7 +32,7 @@ type serverProfile struct {
 	power   int
 }
 
-func seedServers(s *store.RedisStore, cfg *config.Config) error {
+func SeedServers(s *store.RedisStore, cfg *config.Config) error {
 	_, seed := newServerSeedRNG(cfg.Servers.Seed)
 	slog.Info("randomizing server capacities", "component", "seeder", "seed", seed)
 
@@ -145,8 +145,6 @@ func uniqueProfile(
 			latency: sampleRange(tier.latency, rng),
 			power:   sampleRange(tier.power, rng),
 		}
-		// Edge nodes may legitimately have no local disk. Fog and cloud nodes must
-		// always keep some disk available, even if the configured range includes 0.
 		if tier.nodeType != "EDGE" && profile.disk <= 0 {
 			profile.disk = 1
 		}
@@ -155,7 +153,6 @@ func uniqueProfile(
 				continue
 			}
 		}
-
 		key := fmt.Sprintf("%d/%d/%d/%d/%d", profile.cpu, profile.memory, profile.disk, profile.latency, profile.power)
 		if _, exists := seen[key]; exists {
 			continue
