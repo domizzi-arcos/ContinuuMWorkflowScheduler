@@ -33,3 +33,4 @@ AGENTS.md
 # Large external datasets (track via download script / Git LFS, not Git)
 globus dataset/*.pdf
 globus dataset/*.csv
+globus dataset/*.csv
