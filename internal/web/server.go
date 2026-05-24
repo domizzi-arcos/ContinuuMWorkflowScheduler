@@ -1,3 +1,7 @@
+// Package web serves the dashboard for the scheduler: a small REST API over
+// the Redis store, plus a WebSocket hub that fans out a periodic state
+// snapshot to every connected client. It also exposes pause/resume and
+// restart controls that drive the simulation lifecycle.
 package web
 
 import (
@@ -24,7 +28,9 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// WSState is broadcast to every connected client every 500 ms.
+// WSState is broadcast to every connected client every 500 ms. It is a full
+// snapshot rather than a delta so a freshly connected dashboard can render
+// the entire scene from the first frame.
 type WSState struct {
 	Servers    []*models.Server     `json:"servers"`
 	Tasks      []*models.Task       `json:"tasks"`
@@ -35,15 +41,23 @@ type WSState struct {
 	Timestamp  time.Time            `json:"timestamp"`
 }
 
+// RuntimeState describes the lifecycle of the current run as observed by the
+// main loop. Status is one of "running", "paused" or "finished";
+// RestartAvailable is true after a run has finished and a fresh session can
+// be started from the dashboard.
 type RuntimeState struct {
 	Status           string `json:"status"`
 	Active           bool   `json:"active"`
 	RestartAvailable bool   `json:"restart_available"`
 }
 
+// hub is the WebSocket fan-out point. All client lifecycle changes
+// (connect, disconnect) and outbound frames flow through its channels so the
+// client map is only ever touched from hub.run's single goroutine — no mutex
+// required.
 type hub struct {
 	clients    map[*wsClient]bool
-	broadcast  chan []byte
+	broadcast  chan []byte // outbound frames produced by the periodic broadcaster
 	register   chan *wsClient
 	unregister chan *wsClient
 }
@@ -57,6 +71,10 @@ func newHub() *hub {
 	}
 }
 
+// run is the hub's event loop. It owns the clients map and serialises every
+// mutation through its channels. On broadcast a slow client whose send buffer
+// is full is evicted (channel closed, removed from the map) rather than
+// blocking the fan-out for everyone else.
 func (h *hub) run() {
 	for {
 		select {
@@ -72,6 +90,7 @@ func (h *hub) run() {
 				select {
 				case c.send <- msg:
 				default:
+					// Slow client — drop it rather than stall the hub.
 					close(c.send)
 					delete(h.clients, c)
 				}
@@ -80,6 +99,9 @@ func (h *hub) run() {
 	}
 }
 
+// wsClient is the hub's view of a single connected dashboard. send is the
+// per-client outbound queue; the hub pushes frames into it and writePump
+// drains them onto the wire.
 type wsClient struct {
 	hub  *hub
 	conn *websocket.Conn
@@ -130,6 +152,11 @@ func (c *wsClient) readPump() {
 	}
 }
 
+// Server is the dashboard HTTP + WebSocket front-end. It owns the mux router,
+// the WebSocket hub, and the callbacks the simulation provides for querying
+// runtime state and triggering a restart. restart is an indirection because
+// the actual implementation (recreating simulationSession in cmd) lives above
+// this package and would otherwise create an import cycle.
 type Server struct {
 	store   *store.RedisStore
 	control *control.Controller
@@ -140,6 +167,10 @@ type Server struct {
 	router  *mux.Router
 }
 
+// New builds a Server bound to the given store, controller, runtime probe and
+// restart callback. The returned Server is fully wired (routes registered)
+// but does not start listening until Start is called. runtime or restart may
+// be nil; the corresponding endpoints then degrade gracefully.
 func New(s *store.RedisStore, ctrl *control.Controller, runtime func() RuntimeState, restart func() error, port int) *Server {
 	h := newHub()
 	srv := &Server{store: s, control: ctrl, runtime: runtime, restart: restart, hub: h, port: port, router: mux.NewRouter()}
@@ -164,6 +195,11 @@ func (s *Server) setupRoutes() {
 	s.router.PathPrefix("/").Handler(http.FileServer(http.FS(staticFS)))
 }
 
+// Start launches the dashboard. It spins up three goroutines — the hub event
+// loop, the periodic state broadcaster, and net/http's ListenAndServe — and
+// then blocks on done. Once done is closed it gracefully shuts the HTTP
+// server down with a 5 s timeout. Start is intended to be called from the
+// main lifecycle goroutine; it returns only after shutdown completes.
 func (s *Server) Start(done <-chan struct{}) {
 	go s.hub.run()
 	go s.broadcaster(done)
@@ -185,6 +221,12 @@ func (s *Server) Start(done <-chan struct{}) {
 	slog.Info("web server stopped", "component", "web")
 }
 
+// broadcaster builds and ships a fresh WSState every 500 ms for the lifetime
+// of the run. The cadence matches the scheduler's poll interval so the
+// dashboard sees roughly one frame per scheduling tick. JSON encoding happens
+// once here and the resulting byte slice is fanned out to every client by
+// the hub — the per-client send is non-blocking, so a single stuck client
+// cannot delay the broadcast.
 func (s *Server) broadcaster(done <-chan struct{}) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -199,6 +241,8 @@ func (s *Server) broadcaster(done <-chan struct{}) {
 			if err != nil {
 				continue
 			}
+			// Drop this frame if the hub's broadcast buffer is full;
+			// the next tick will produce a fresher snapshot anyway.
 			select {
 			case s.hub.broadcast <- data:
 			default:

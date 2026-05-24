@@ -1,0 +1,119 @@
+# Configuration for the benchmark grid study.
+# The grid runner overrides scheduler.algorithm, the per-tier server counts,
+# and experiment.duration_seconds via CLI flags; everything else below is the
+# shared environment used across all five algorithm runs.
+
+# ─── INFRASTRUCTURE ────────────────────────────────────────────────────────────
+servers:
+  seed: 42        # 0 = randomize capacities differently on each startup
+  edge:
+    count: 3
+    cpu:            # cores
+      min: 1
+      max: 2
+    memory:         # MB
+      min: 128
+      max: 768
+      step: 128
+    disk:           # GB; some edge nodes may have no local disk
+      min: 0
+      max: 20
+      step: 1
+    wan_latency:    # ms
+      min: 3
+      max: 12
+      step: 1
+    cost_per_hour: 0.02   # USD per server-hour
+    power_watts:          # power draw in W
+      min: 10
+      max: 25
+      step: 5
+  fog:
+    count: 3
+    cpu:
+      min: 4
+      max: 8
+    memory:         # MB
+      min: 2048
+      max: 8192
+      step: 512
+    disk:           # GB; fog nodes always keep local disk
+      min: 40
+      max: 140
+      step: 10
+    wan_latency:
+      min: 20
+      max: 45
+      step: 5
+    cost_per_hour: 0.25
+    power_watts:
+      min: 100
+      max: 200
+      step: 25
+  cloud:
+    count: 3
+    cpu:
+      min: 16
+      max: 32
+      step: 2
+    memory:         # MB
+      min: 16384
+      max: 65536
+      step: 4096
+    disk:           # GB; cloud nodes always keep local disk
+      min: 400
+      max: 1600
+      step: 100
+    wan_latency:
+      min: 80
+      max: 160
+      step: 10
+    cost_per_hour: 1.50
+    power_watts:
+      min: 300
+      max: 600
+      step: 50
+
+# ─── SCHEDULER ─────────────────────────────────────────────────────────────────
+scheduler:
+  algorithm: "topsis"        # overridden per run by the grid loop
+  seed: 42                   # for reproducible random assignments
+  topsis_weights:            # only used when algorithm = topsis. All four weights are
+                             # renormalised at startup so they sum to 1.0 (so the values
+                             # below behave as relative shares, not absolute percentages).
+                             # With these defaults the runtime weights are
+                             # (0.32, 0.24, 0.24, 0.20).
+    time:   0.4
+    cost:   0.3
+    energy: 0.3
+    util:   0.25             # post-placement capacity-utilisation criterion; 0 disables, 0.25 is balanced default
+
+# ─── TASK GENERATOR ────────────────────────────────────────────────────────────
+generator:
+  task_count: 120            # number of task templates to sample / generate at startup
+  seed: 0                    # 0 = different sample on every startup; non-zero = reproducible
+  dataset_path: "globus dataset/GlobusComputeDataset-v1-enriched.csv"  # CSV of real task records — see globus dataset/
+  edge_max_duration_ms: 2500
+  fog_max_duration_ms: 6500
+  workflow_seed: 42           # seed for workflow instantiation RNG (0 = random)
+  priority_min: 1             # lowest workflow priority that can be assigned
+  priority_max: 10            # highest workflow priority that can be assigned
+
+# ─── CONNECTION ────────────────────────────────────────────────────────────────
+# Hostnames match the service names in docker-compose.yml.
+redis:
+  address: "redis:6379"
+  db: 0
+
+rabbitmq:
+  url: "amqp://guest:guest@rabbitmq:5672/"
+
+# ─── WEB DASHBOARD ─────────────────────────────────────────────────────────────
+# Unused by the benchmark runner (no dashboard), but the config schema requires it.
+web:
+  port: 8080
+
+# ─── EXPERIMENT ────────────────────────────────────────────────────────────────
+experiment:
+  duration_seconds: 120      # overridden per run by -duration flag
+  progress_log_seconds: 10

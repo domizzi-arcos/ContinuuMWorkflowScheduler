@@ -73,16 +73,21 @@ servers:
 scheduler:
   algorithm: "topsis"   # round_robin | random | best_fit | worst_fit | topsis
   seed: 42                   # for reproducible random assignments
-  topsis_weights:            # only used when algorithm = topsis (auto-normalised to sum=1)
+  topsis_weights:            # only used when algorithm = topsis. All four weights are
+                             # renormalised at startup so they sum to 1.0 (so the values
+                             # below behave as relative shares, not absolute percentages).
+                             # With these defaults the runtime weights are
+                             # (0.32, 0.24, 0.24, 0.20).
     time:   0.4
     cost:   0.3
     energy: 0.3
+    util:   0.25             # post-placement capacity-utilisation criterion; 0 disables, 0.25 is balanced default
 
 # ─── TASK GENERATOR ────────────────────────────────────────────────────────────
 generator:
   task_count: 120            # number of task templates to sample / generate at startup
   seed: 0                    # 0 = different sample on every startup; non-zero = reproducible
-  dataset_path: "globus dataset/GlobusComputeDataset-v1-enriched.csv"  # leave blank to use synthetic random tasks
+  dataset_path: "globus dataset/GlobusComputeDataset-v1-enriched.csv"  # CSV of real task records — see globus dataset/
   # edge_max_duration_ms and fog_max_duration_ms are ignored when dataset_path is set
   edge_max_duration_ms: 2500
   fog_max_duration_ms: 6500

@@ -6,6 +6,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// TestIntRangeUnmarshalSupportsScalarAndMap pins both YAML shapes accepted by
+// IntRange: a bare scalar (which collapses to Min=Max=value) and the explicit
+// {min, max, step} map. Both shapes are exercised in config.yaml today.
 func TestIntRangeUnmarshalSupportsScalarAndMap(t *testing.T) {
 	var cfg struct {
 		CPU    IntRange `yaml:"cpu"`
@@ -34,6 +37,9 @@ memory:
 	}
 }
 
+// TestApplyDefaultsAddsGeneratorDefaults documents the fallback values used
+// when config.yaml omits the generator/server blocks. These defaults are what
+// any reader of a fresh config gets if a field is left unset.
 func TestApplyDefaultsAddsGeneratorDefaults(t *testing.T) {
 	cfg := &Config{
 		Generator: GeneratorConfig{},

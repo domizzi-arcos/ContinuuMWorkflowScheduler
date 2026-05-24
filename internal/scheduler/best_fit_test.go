@@ -6,12 +6,15 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 )
 
+// TestBestFitName pins the algorithm identifier used in config.yaml.
 func TestBestFitName(t *testing.T) {
 	if NewBestFit().Name() != "best_fit" {
 		t.Fatal("unexpected name")
 	}
 }
 
+// TestBestFitSelectNilOnEmpty asserts Select returns nil when there are no
+// candidates, so the dispatcher can branch safely on a nil return.
 func TestBestFitSelectNilOnEmpty(t *testing.T) {
 	if NewBestFit().Select(nil, nil) != nil {
 		t.Fatal("expected nil for empty candidates")
@@ -21,6 +24,8 @@ func TestBestFitSelectNilOnEmpty(t *testing.T) {
 	}
 }
 
+// TestBestFitSelectSingleCandidate guards the degenerate case where only one
+// server is eligible — Select must return it unchanged.
 func TestBestFitSelectSingleCandidate(t *testing.T) {
 	srv := &models.Server{ID: "only", MaxCPU: 4, MaxMemory: 512, MaxDisk: 5}
 	if NewBestFit().Select(nil, []*models.Server{srv}) != srv {
@@ -28,6 +33,9 @@ func TestBestFitSelectSingleCandidate(t *testing.T) {
 	}
 }
 
+// TestBestFitSelectPicksMostPacked exercises the tight-fit invariant across
+// candidate orderings and load profiles: BestFit must always return the
+// server with the smallest FreeCapacity, regardless of slice order.
 func TestBestFitSelectPicksMostPacked(t *testing.T) {
 	// FreeCapacity = (MaxCPU-UsedCPU) + (MaxMemory-UsedMemory)/100 + (MaxDisk-UsedDisk)
 	// a: 1 + 1 + 1 = 3   (most packed, BestFit should choose this)

@@ -1,3 +1,6 @@
+// Package seeder populates Redis with synthetic tier-balanced server profiles
+// before the simulation starts. Each tier's server pool is sized and randomized
+// from `config.ServersConfig`, with deterministic seeds when configured.
 package seeder
 
 import (
@@ -12,6 +15,9 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 )
 
+// tierSeedConfig bundles the resolved range specs and per-server cost for one
+// tier so buildTierServers can sample profiles without re-reading the global
+// config.
 type tierSeedConfig struct {
 	name        string
 	nodeType    string
@@ -24,6 +30,8 @@ type tierSeedConfig struct {
 	power       config.IntRange
 }
 
+// serverProfile is one sampled point in the (cpu, memory, disk, latency, power)
+// capacity space; used to deduplicate generated servers within a tier.
 type serverProfile struct {
 	cpu     int
 	memory  int
@@ -32,6 +40,10 @@ type serverProfile struct {
 	power   int
 }
 
+// SeedServers generates Edge, Fog, and Cloud server records by sampling each
+// tier's configured capacity ranges and persists them via the supplied
+// RedisStore. Each tier uses an independent RNG derived from the base seed so
+// runs with the same seed produce identical fleets.
 func SeedServers(s *store.RedisStore, cfg *config.Config) error {
 	_, seed := newServerSeedRNG(cfg.Servers.Seed)
 	slog.Info("randomizing server capacities", "component", "seeder", "seed", seed)
@@ -73,6 +85,8 @@ func SeedServers(s *store.RedisStore, cfg *config.Config) error {
 	}
 
 	for i, tier := range tiers {
+		// Offset the seed per tier so tiers are independent yet still
+		// reproducible from the single configured base seed.
 		rng := rand.New(rand.NewSource(seed + int64(i)))
 		servers, err := buildTierServers(tier, rng)
 		if err != nil {
@@ -93,11 +107,17 @@ func SeedServers(s *store.RedisStore, cfg *config.Config) error {
 	return nil
 }
 
+// buildTierServers samples `tier.count` unique server profiles from the tier's
+// configured ranges. It aborts up-front if the cartesian product of available
+// capacity options is smaller than the requested count — there is no way to
+// satisfy uniqueness in that case so we fail loudly instead of looping forever.
 func buildTierServers(tier tierSeedConfig, rng *rand.Rand) ([]*models.Server, error) {
 	if tier.count <= 0 {
 		return nil, nil
 	}
 	combinations := tierCombinationCount(tier)
+	// Abort early: requesting more unique servers than the capacity grid
+	// allows would cause uniqueProfile to spin until maxAttempts and fail.
 	if combinations < int64(tier.count) {
 		return nil, fmt.Errorf(
 			"tier %s requests %d unique servers but only %d unique capacity combinations are available",
@@ -106,6 +126,8 @@ func buildTierServers(tier tierSeedConfig, rng *rand.Rand) ([]*models.Server, er
 	}
 
 	diskOptions := rangeOptionCount(tier.disk)
+	// When disk has at least `count` distinct values, force unique disks per
+	// server in the tier so visualisations stay visually distinguishable.
 	ensureUniqueDisk := diskOptions >= tier.count
 	usedDisks := make(map[int]struct{}, tier.count)
 	seenProfiles := make(map[string]struct{}, tier.count)
@@ -129,6 +151,10 @@ func buildTierServers(tier tierSeedConfig, rng *rand.Rand) ([]*models.Server, er
 	return servers, nil
 }
 
+// uniqueProfile rejection-samples a (cpu, memory, disk, latency, power) tuple
+// not already present in `seen`, optionally enforcing a fresh disk size too.
+// Returns an error if no unique profile is found within a bounded attempt
+// budget derived from the requested tier count.
 func uniqueProfile(
 	tier tierSeedConfig,
 	seen map[string]struct{},
@@ -145,6 +171,8 @@ func uniqueProfile(
 			latency: sampleRange(tier.latency, rng),
 			power:   sampleRange(tier.power, rng),
 		}
+		// Fog and Cloud nodes always need at least 1 GB of disk; Edge may
+		// legitimately have 0 (diskless sensors).
 		if tier.nodeType != "EDGE" && profile.disk <= 0 {
 			profile.disk = 1
 		}
@@ -166,13 +194,20 @@ func uniqueProfile(
 	return serverProfile{}, fmt.Errorf("could not generate a unique server profile for tier %s", tier.name)
 }
 
+// newServerSeedRNG returns a fresh RNG and the effective seed. A configured
+// seed of 0 means "non-deterministic": fall back to the current wall clock so
+// successive runs differ.
 func newServerSeedRNG(seed int64) (*rand.Rand, int64) {
 	if seed == 0 {
+		// seed == 0 in config means "use time.Now()" — i.e. caller wants a
+		// fresh random fleet on every run rather than a reproducible one.
 		seed = time.Now().UTC().UnixNano()
 	}
 	return rand.New(rand.NewSource(seed)), seed
 }
 
+// sampleRange draws one value uniformly from r's discrete grid (Min, Min+Step,
+// …, Max). Degenerate ranges (single option) short-circuit to r.Min.
 func sampleRange(r config.IntRange, rng *rand.Rand) int {
 	options := rangeOptionCount(r)
 	if options <= 1 {
@@ -181,6 +216,8 @@ func sampleRange(r config.IntRange, rng *rand.Rand) int {
 	return r.Min + rng.Intn(options)*maxInt(1, r.Step)
 }
 
+// rangeOptionCount returns how many distinct values fit in r's [Min, Max] grid
+// at the configured Step. Returns 0 for inverted ranges (Max < Min).
 func rangeOptionCount(r config.IntRange) int {
 	step := maxInt(1, r.Step)
 	if r.Max < r.Min {
@@ -189,6 +226,10 @@ func rangeOptionCount(r config.IntRange) int {
 	return ((r.Max - r.Min) / step) + 1
 }
 
+// tierCombinationCount is the size of the cartesian product of the tier's CPU,
+// memory, disk, and latency ranges — the upper bound on unique server profiles
+// available for sampling. Power is intentionally excluded to keep the uniqueness
+// check focused on scheduling-relevant capacity.
 func tierCombinationCount(tier tierSeedConfig) int64 {
 	return int64(rangeOptionCount(tier.cpu)) *
 		int64(rangeOptionCount(tier.memory)) *
@@ -196,6 +237,8 @@ func tierCombinationCount(tier tierSeedConfig) int64 {
 		int64(rangeOptionCount(tier.latency))
 }
 
+// maxInt returns the larger of a and b. Local helper to avoid importing a
+// generic math package solely for two ints.
 func maxInt(a, b int) int {
 	if a > b {
 		return a

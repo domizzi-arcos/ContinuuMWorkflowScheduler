@@ -6,12 +6,14 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 )
 
+// TestRoundRobinName pins the algorithm identifier used in config.yaml.
 func TestRoundRobinName(t *testing.T) {
 	if NewRoundRobin().Name() != "round_robin" {
 		t.Fatal("unexpected name")
 	}
 }
 
+// TestRoundRobinSelectNilOnEmpty guards the empty-candidate branch.
 func TestRoundRobinSelectNilOnEmpty(t *testing.T) {
 	if NewRoundRobin().Select(nil, nil) != nil {
 		t.Fatal("expected nil for empty candidates")
@@ -21,6 +23,9 @@ func TestRoundRobinSelectNilOnEmpty(t *testing.T) {
 	}
 }
 
+// TestRoundRobinSelectCyclesInSortedOrder pins that successive Select calls
+// rotate through candidates in deterministic ID-sorted order so the rotation
+// is reproducible regardless of how the caller orders the slice.
 func TestRoundRobinSelectCyclesInSortedOrder(t *testing.T) {
 	// Provide servers in unsorted order; RoundRobin must sort by ID before cycling.
 	servers := []*models.Server{
@@ -43,6 +48,9 @@ func TestRoundRobinSelectCyclesInSortedOrder(t *testing.T) {
 	}
 }
 
+// TestRoundRobinSelectSingleCandidateAlwaysReturnsIt covers the degenerate
+// single-server case — there's nothing to rotate, so Select must return it
+// every call.
 func TestRoundRobinSelectSingleCandidateAlwaysReturnsIt(t *testing.T) {
 	srv := &models.Server{ID: "solo"}
 	rr := NewRoundRobin()
@@ -54,6 +62,9 @@ func TestRoundRobinSelectSingleCandidateAlwaysReturnsIt(t *testing.T) {
 	}
 }
 
+// TestRoundRobinCounterPersistsAcrossCalls verifies the rotation counter is
+// instance-scoped, not call-scoped — two consecutive Selects must return
+// different servers.
 func TestRoundRobinCounterPersistsAcrossCalls(t *testing.T) {
 	// Counter must advance globally, not reset per call.
 	s1 := &models.Server{ID: "s1"}

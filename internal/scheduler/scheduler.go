@@ -1,3 +1,8 @@
+// Package scheduler dispatches pending executions to tier-specific RabbitMQ
+// queues by selecting a server via a pluggable Algorithm. It defines the
+// Algorithm interface, owns the 500 ms polling loop that drains PENDING
+// executions from Redis, and ships five built-in policies: round_robin,
+// random, best_fit, worst_fit, and TOPSIS.
 package scheduler
 
 import (
@@ -35,6 +40,9 @@ type Scheduler struct {
 	active       map[string]int // value = retry count
 }
 
+// New builds a Scheduler bound to a Redis store, broker, and the channel the
+// Generator uses to announce freshly created executions. The poll interval is
+// fixed at 500 ms; ctrl provides the shared pause gate.
 func New(s *store.RedisStore, b *broker.Broker, algorithm Algorithm, executionIDs <-chan string, ctrl *control.Controller) *Scheduler {
 	return &Scheduler{
 		store:        s,
@@ -48,8 +56,10 @@ func New(s *store.RedisStore, b *broker.Broker, algorithm Algorithm, executionID
 }
 
 // NewAlgorithm creates an Algorithm from the config string.
-// wTime, wCost, wEnergy are the TOPSIS criterion weights (only used when name == "topsis").
-func NewAlgorithm(name string, seed int64, wTime, wCost, wEnergy float64) Algorithm {
+// wTime, wCost, wEnergy, wUtil are the TOPSIS criterion weights
+// (only used when name == "topsis"). wUtil weights post-placement capacity
+// utilisation; pass 0 to disable and recover 3-criterion TOPSIS.
+func NewAlgorithm(name string, seed int64, wTime, wCost, wEnergy, wUtil float64) Algorithm {
 	switch strings.ToLower(name) {
 	case "random":
 		return NewRandom(seed)
@@ -58,7 +68,7 @@ func NewAlgorithm(name string, seed int64, wTime, wCost, wEnergy float64) Algori
 	case "worst_fit":
 		return NewWorstFit()
 	case "topsis":
-		return NewTOPSIS(wTime, wCost, wEnergy)
+		return NewTOPSIS(wTime, wCost, wEnergy, wUtil)
 	default:
 		return NewRoundRobin()
 	}
@@ -92,6 +102,10 @@ func (s *Scheduler) Start(done <-chan struct{}) {
 	}
 }
 
+// dispatch is one tick of the polling loop: it snapshots the currently tracked
+// execution IDs, classifies them by status, and routes any PENDING work to
+// dispatchOne in priority order. Servers are fetched once per tick so every
+// candidate sees the same view of resource counters.
 func (s *Scheduler) dispatch(done <-chan struct{}) {
 	executionIDs := s.snapshotActiveExecutions()
 	if len(executionIDs) == 0 {
@@ -138,6 +152,12 @@ func (s *Scheduler) dispatch(done <-chan struct{}) {
 	}
 }
 
+// dispatchOne attempts to place a single execution. The reservation step is
+// the only atomicity guarantee: ReserveServerResources runs WATCH/MULTI/EXEC
+// inside Redis so two scheduler ticks (or replicas) cannot both commit the
+// same capacity. If reservation fails after the local capacity check we treat
+// it as transient and bump a retry counter; the execution stays tracked and
+// will be retried on the next tick.
 func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.Server, done <-chan struct{}) {
 	task, err := s.store.GetTask(execution.TaskID)
 	if err != nil {
@@ -178,6 +198,8 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 
 	if err := s.store.AssignExecution(execution.ID, srv.ID, "QUEUED"); err != nil {
 		slog.Error("error assigning execution", "component", "scheduler", "execution_id", execution.ID, "err", err)
+		// Capacity was already reserved on the server; release it so we don't
+		// leak units when the execution write fails partway through.
 		rolledBack, releaseErr := s.store.ReleaseServerResources(srv.ID, task.CPU, task.Memory, task.Disk, false)
 		if releaseErr != nil {
 			slog.Error("error rolling back server after assign failure", "component", "scheduler", "server_id", srv.ID, "err", releaseErr)
@@ -196,6 +218,9 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 	routingKey := strings.ToLower(srv.Type)
 	if err := s.broker.PublishTask(routingKey, body); err != nil {
 		slog.Error("publish error", "component", "scheduler", "execution_id", execution.ID, "err", err)
+		// Broker publish failed after Redis already moved the execution to
+		// QUEUED; revert both the execution state and the server reservation
+		// so a retry on the next tick sees a clean slate.
 		if revertErr := s.store.RevertExecutionAssignment(execution.ID); revertErr != nil {
 			slog.Error("error reverting execution assignment", "component", "scheduler", "execution_id", execution.ID, "err", revertErr)
 		}
@@ -225,6 +250,9 @@ func (s *Scheduler) dispatchOne(execution *models.Execution, servers []*models.S
 	slog.Debug("execution dispatched", attrs...)
 }
 
+// filterByCapacity narrows the global server pool to those that currently
+// report enough free CPU, memory and disk for the task. The check is local;
+// the authoritative reservation happens later inside Redis.
 func filterByCapacity(task *models.Task, servers []*models.Server) []*models.Server {
 	out := make([]*models.Server, 0, len(servers))
 	for _, srv := range servers {
@@ -235,6 +263,9 @@ func filterByCapacity(task *models.Task, servers []*models.Server) []*models.Ser
 	return out
 }
 
+// updateLocal swaps the local snapshot entry for a server with the freshly
+// reserved/released version returned by Redis, so subsequent picks in the
+// same tick see the updated counters without a refetch.
 func updateLocal(servers []*models.Server, updated *models.Server) {
 	for i, srv := range servers {
 		if srv.ID == updated.ID {
@@ -244,6 +275,9 @@ func updateLocal(servers []*models.Server, updated *models.Server) {
 	}
 }
 
+// bootstrapActiveExecutions rebuilds the in-memory active set from Redis on
+// startup so a restarted scheduler picks up executions that survived the
+// previous process (anything not DONE or BLOCKED is dispatchable again).
 func (s *Scheduler) bootstrapActiveExecutions() {
 	executions, err := s.store.GetAllExecutions()
 	if err != nil {
@@ -259,6 +293,8 @@ func (s *Scheduler) bootstrapActiveExecutions() {
 	}
 }
 
+// trackExecution adds an execution ID to the active set with a zero retry
+// count. Re-tracking a known ID is a no-op so the retry counter is preserved.
 func (s *Scheduler) trackExecution(executionID string) {
 	if executionID == "" {
 		return
@@ -270,12 +306,17 @@ func (s *Scheduler) trackExecution(executionID string) {
 	s.mu.Unlock()
 }
 
+// untrackExecution drops the ID from the active set; called when the
+// execution finishes or its underlying state in Redis becomes unreadable.
 func (s *Scheduler) untrackExecution(executionID string) {
 	s.mu.Lock()
 	delete(s.active, executionID)
 	s.mu.Unlock()
 }
 
+// incrementRetry bumps the per-execution retry counter and returns the new
+// value. The counter is used purely to dedupe "no capacity, will retry"
+// log lines.
 func (s *Scheduler) incrementRetry(executionID string) int {
 	s.mu.Lock()
 	s.active[executionID]++
@@ -284,6 +325,9 @@ func (s *Scheduler) incrementRetry(executionID string) int {
 	return n
 }
 
+// resetRetry clears the per-execution retry counter after a successful
+// dispatch and returns the previous count so the caller can attach it to
+// the success log line.
 func (s *Scheduler) resetRetry(executionID string) int {
 	s.mu.Lock()
 	n := s.active[executionID]
@@ -292,6 +336,8 @@ func (s *Scheduler) resetRetry(executionID string) int {
 	return n
 }
 
+// snapshotActiveExecutions returns a copy of the currently tracked IDs so
+// dispatch can iterate without holding the mutex while it does I/O.
 func (s *Scheduler) snapshotActiveExecutions() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

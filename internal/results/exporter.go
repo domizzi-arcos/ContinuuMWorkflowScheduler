@@ -14,6 +14,8 @@ import (
 )
 
 // ExperimentResult is the top-level structure written to the JSON output file.
+// The schema is stable — downstream notebooks or scripts loading
+// `results/*.json` rely on the exact field names below.
 type ExperimentResult struct {
 	Meta      ExperimentMeta       `json:"meta"`
 	Summary   ExperimentSummary    `json:"summary"`
@@ -22,28 +24,36 @@ type ExperimentResult struct {
 	Servers   []*ServerSnapshot    `json:"servers"`
 }
 
+// ExperimentMeta records the configuration that produced a result file:
+// which algorithm ran, when, for how long, and over how many servers per
+// tier. TOPSISWeights is only populated when the algorithm is "topsis".
 type ExperimentMeta struct {
-	Algorithm     string            `json:"algorithm"`
-	Timestamp     time.Time         `json:"timestamp"`
-	DurationS     int               `json:"duration_seconds"`
-	TaskCount     int               `json:"task_count"`
-	NumServers    map[string]int    `json:"num_servers"`
+	Algorithm     string               `json:"algorithm"`
+	Timestamp     time.Time            `json:"timestamp"`
+	DurationS     int                  `json:"duration_seconds"`
+	TaskCount     int                  `json:"task_count"`
+	NumServers    map[string]int       `json:"num_servers"`
 	TOPSISWeights config.TOPSISWeights `json:"topsis_weights,omitempty"`
 }
 
+// ExperimentSummary holds the aggregate metrics computed at end-of-run by
+// buildSummary. Throughput is tasks-per-minute over wall time (not active
+// time); makespan stats only cover workflows whose Status is DONE.
 type ExperimentSummary struct {
-	TotalTasksCompleted     int            `json:"total_tasks_completed"`
-	TotalWorkflowsCompleted int            `json:"total_workflows_completed"`
-	AvgMakespanMS           float64        `json:"avg_workflow_makespan_ms"`
-	P50MakespanMS           int64          `json:"p50_workflow_makespan_ms"`
-	P95MakespanMS           int64          `json:"p95_workflow_makespan_ms"`
-	TotalCostUSD            float64        `json:"total_cost_usd"`
-	TotalEnergyWh           float64        `json:"total_energy_wh"`
-	ThroughputPerMin        float64        `json:"throughput_tasks_per_min"`
-	AvgEffectiveDurationMS  float64        `json:"avg_effective_duration_ms"`
+	TotalTasksCompleted     int                    `json:"total_tasks_completed"`
+	TotalWorkflowsCompleted int                    `json:"total_workflows_completed"`
+	AvgMakespanMS           float64                `json:"avg_workflow_makespan_ms"`
+	P50MakespanMS           int64                  `json:"p50_workflow_makespan_ms"`
+	P95MakespanMS           int64                  `json:"p95_workflow_makespan_ms"`
+	TotalCostUSD            float64                `json:"total_cost_usd"`
+	TotalEnergyWh           float64                `json:"total_energy_wh"`
+	ThroughputPerMin        float64                `json:"throughput_tasks_per_min"`
+	AvgEffectiveDurationMS  float64                `json:"avg_effective_duration_ms"`
 	ByTier                  map[string]TierSummary `json:"by_tier"`
 }
 
+// TierSummary aggregates per-tier (EDGE, FOG, CLOUD) totals. AvgDurationMS
+// uses tasks placed on this tier, not all tasks system-wide.
 type TierSummary struct {
 	TasksCompleted int     `json:"tasks_completed"`
 	AvgDurationMS  float64 `json:"avg_effective_duration_ms"`
@@ -51,6 +61,8 @@ type TierSummary struct {
 	TotalEnergyWh  float64 `json:"total_energy_wh"`
 }
 
+// WorkflowSummary is the trimmed view of a WorkflowInstance kept in the
+// exported JSON — the full instance with its slot→exec map stays in Redis.
 type WorkflowSummary struct {
 	ID           string    `json:"id"`
 	TemplateName string    `json:"template_name"`
@@ -60,6 +72,9 @@ type WorkflowSummary struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// ServerSnapshot captures end-of-run counters per server so the analysis
+// scripts can compute load-balance metrics (e.g. tasks-per-server stdev).
+// ActiveTasks should be 0 after a clean drain but is reported anyway.
 type ServerSnapshot struct {
 	ID             string `json:"id"`
 	ServerType     string `json:"server_type"`
@@ -67,7 +82,11 @@ type ServerSnapshot struct {
 	ActiveTasks    int    `json:"active_tasks"`
 }
 
-// Export reads all results from Redis and writes a JSON file to outputDir.
+// Export reads all task results, workflow instances, and server state from
+// Redis, builds the aggregate summary, and writes the combined JSON to a
+// timestamped file under outputDir. The filename encodes the algorithm and
+// per-tier server counts so the grid runner can scan a results directory
+// without re-opening every file.
 func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration, outputDir string) {
 	tasks, err := s.GetAllTaskResults()
 	if err != nil {
@@ -153,6 +172,10 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration,
 	slog.Info("results exported", "component", "exporter", "tasks", len(tasks), "workflows", len(wfSummaries), "file", filename)
 }
 
+// buildSummary aggregates per-tier and overall metrics from the task list,
+// plus makespan percentiles over the completed workflows. Throughput uses
+// wallMin = max(wall.Minutes(), 1) so a very short run does not divide by
+// near-zero. p50/p95 use the nearest-rank method on the sorted makespans.
 func buildSummary(tasks []*models.TaskResult, workflows []*models.WorkflowInstance, wall time.Duration) ExperimentSummary {
 	byTier := map[string]*TierSummary{
 		"EDGE":  {},

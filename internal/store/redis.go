@@ -1,3 +1,18 @@
+// Package store is the single source of truth for tasks, executions, servers,
+// and results. Every other package reads and writes simulation state through
+// RedisStore, which wraps a single go-redis client.
+//
+// Key schema used throughout the simulation:
+//
+//	task:<id>          static task definition seeded at startup
+//	execution:<id>     execution instance (PENDING → QUEUED → RUNNING → DONE)
+//	server:<id>        server node with live resource counters
+//	result:<exec_id>   completed TaskResult
+//	workflow:<id>      workflow instance (multi-slot composite job)
+//	counter:execution  monotonic counter feeding exec_000001, exec_000002, …
+//
+// Mutating operations on executions and servers use Redis WATCH/MULTI/EXEC
+// for optimistic concurrency control; see updateExecution and updateServer.
 package store
 
 import (
@@ -14,15 +29,32 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// RedisStore is the thread-safe handle every other package uses to read and
+// write simulation state. The underlying go-redis client manages its own
+// connection pool, so a single RedisStore is shared across all goroutines.
 type RedisStore struct {
 	client *redis.Client
 }
 
+// optimisticWriteRetries caps the WATCH/MULTI/EXEC retry loop in
+// updateExecution and updateServer. Under bursty concurrent writes a few
+// retries are expected; 16 is a generous ceiling that still surfaces real
+// contention bugs instead of looping forever.
 const optimisticWriteRetries = 16
+
+// executionTTL bounds how long execution/result/workflow keys survive in
+// Redis. The simulation never runs longer than this, so expiry only matters
+// across crash-and-restart cycles where stale data should age out.
 const executionTTL = 2 * time.Hour
 
+// errInsufficientCapacity is returned by ReserveServerResources when the
+// chosen server cannot fit the requested CPU/memory/disk. It is a sentinel
+// signalling "try another server", not a transport-level failure.
 var errInsufficientCapacity = errors.New("insufficient server capacity")
 
+// RawEntry is one row of the raw Redis inspection dump exposed by the web UI.
+// Value is either the original string or, when the payload parses as JSON,
+// the decoded structure — Category is the key prefix (task, execution, …).
 type RawEntry struct {
 	Key       string      `json:"key"`
 	Category  string      `json:"category"`
@@ -56,6 +88,9 @@ func retryBackoff(attempt int) {
 	time.Sleep(base + jitter)
 }
 
+// NewRedisStore dials Redis at addr, selects the given logical DB, and
+// verifies connectivity with a PING before returning. The returned store is
+// safe for concurrent use by every package in the simulation.
 func NewRedisStore(addr string, db int) (*RedisStore, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr: addr,
@@ -69,6 +104,8 @@ func NewRedisStore(addr string, db int) (*RedisStore, error) {
 
 // ── Task Definitions ────────────────────────────────────────────────────────
 
+// StoreTask writes a task definition under task:<id>. Task definitions are
+// seeded once per session and never expire (TTL = 0).
 func (s *RedisStore) StoreTask(task *models.Task) error {
 	data, err := json.Marshal(task)
 	if err != nil {
@@ -77,6 +114,8 @@ func (s *RedisStore) StoreTask(task *models.Task) error {
 	return s.client.Set(context.Background(), "task:"+task.ID, data, 0).Err()
 }
 
+// GetTask fetches the task definition at task:<id>. Returns redis.Nil when
+// the key is missing.
 func (s *RedisStore) GetTask(id string) (*models.Task, error) {
 	data, err := s.client.Get(context.Background(), "task:"+id).Result()
 	if err != nil {
@@ -86,6 +125,8 @@ func (s *RedisStore) GetTask(id string) (*models.Task, error) {
 	return &task, json.Unmarshal([]byte(data), &task)
 }
 
+// GetAllTasks scans every task:* key and returns the decoded definitions
+// sorted by CreatedAt, then ID as a tiebreaker for stable UI rendering.
 func (s *RedisStore) GetAllTasks() ([]*models.Task, error) {
 	ctx := context.Background()
 	keys, err := s.scanKeys(ctx, "task:*")
@@ -115,6 +156,9 @@ func (s *RedisStore) GetAllTasks() ([]*models.Task, error) {
 
 // ── Executions ──────────────────────────────────────────────────────────────
 
+// CreateExecution allocates the next ID via INCR on counter:execution, then
+// writes a PENDING execution under execution:<id>. The ID is the zero-padded
+// counter value (exec_000001, exec_000002, …) so it sorts lexicographically.
 func (s *RedisStore) CreateExecution(taskID string, createdAt time.Time) (*models.Execution, error) {
 	ctx := context.Background()
 	seq, err := s.client.Incr(ctx, "counter:execution").Result()
@@ -183,6 +227,8 @@ func (s *RedisStore) PromoteExecution(executionID string) error {
 	return err
 }
 
+// GetExecution returns the execution at execution:<id>. Returns redis.Nil
+// when the key is missing or has expired (TTL = executionTTL).
 func (s *RedisStore) GetExecution(id string) (*models.Execution, error) {
 	data, err := s.client.Get(context.Background(), "execution:"+id).Result()
 	if err != nil {
@@ -192,6 +238,8 @@ func (s *RedisStore) GetExecution(id string) (*models.Execution, error) {
 	return &execution, json.Unmarshal([]byte(data), &execution)
 }
 
+// GetAllExecutions scans execution:* and returns every decoded execution
+// sorted by CreatedAt, with ID as a stable tiebreaker.
 func (s *RedisStore) GetAllExecutions() ([]*models.Execution, error) {
 	ctx := context.Background()
 	keys, err := s.scanKeys(ctx, "execution:*")
@@ -219,6 +267,9 @@ func (s *RedisStore) GetAllExecutions() ([]*models.Execution, error) {
 	return executions, nil
 }
 
+// AssignExecution atomically records the chosen server and the new status
+// (typically QUEUED) on the execution. Uses optimistic-concurrency retry so
+// it is safe against concurrent updates from worker or results goroutines.
 func (s *RedisStore) AssignExecution(executionID, serverID, state string) error {
 	_, err := s.updateExecution(executionID, func(execution *models.Execution) error {
 		execution.AssignedServer = serverID
@@ -228,6 +279,10 @@ func (s *RedisStore) AssignExecution(executionID, serverID, state string) error 
 	return err
 }
 
+// RevertExecutionAssignment rolls an execution back to PENDING and clears
+// any server assignment and timestamps. Called when broker publish fails
+// after the scheduler has already reserved capacity — the reservation is
+// released separately via ReleaseServerResources.
 func (s *RedisStore) RevertExecutionAssignment(executionID string) error {
 	_, err := s.updateExecution(executionID, func(execution *models.Execution) error {
 		execution.AssignedServer = ""
@@ -239,6 +294,8 @@ func (s *RedisStore) RevertExecutionAssignment(executionID string) error {
 	return err
 }
 
+// MarkExecutionRunning transitions the execution to RUNNING and stamps the
+// start time. Workers call this immediately before sleeping to simulate work.
 func (s *RedisStore) MarkExecutionRunning(executionID string, startedAt time.Time) error {
 	_, err := s.updateExecution(executionID, func(execution *models.Execution) error {
 		execution.Status = "RUNNING"
@@ -248,6 +305,8 @@ func (s *RedisStore) MarkExecutionRunning(executionID string, startedAt time.Tim
 	return err
 }
 
+// MarkExecutionDone transitions the execution to DONE and stamps the
+// completion time. Workers call this once the simulated sleep elapses.
 func (s *RedisStore) MarkExecutionDone(executionID string, completedAt time.Time) error {
 	_, err := s.updateExecution(executionID, func(execution *models.Execution) error {
 		execution.Status = "DONE"
@@ -259,6 +318,9 @@ func (s *RedisStore) MarkExecutionDone(executionID string, completedAt time.Time
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
+// StoreServer writes a server node under server:<id> with no TTL. Used to
+// seed the server pool at session start and to commit updates that bypass
+// the optimistic-concurrency helpers (e.g. full overwrites during seeding).
 func (s *RedisStore) StoreServer(srv *models.Server) error {
 	data, err := json.Marshal(srv)
 	if err != nil {
@@ -267,6 +329,12 @@ func (s *RedisStore) StoreServer(srv *models.Server) error {
 	return s.client.Set(context.Background(), "server:"+srv.ID, data, 0).Err()
 }
 
+// ReserveServerResources tries to charge cpu/memory/disk against the named
+// server. The second return value reports whether the reservation succeeded:
+// false means the server lacked capacity (and the returned server is the
+// current snapshot, useful for diagnostics). Any other error is propagated
+// as-is. The check-and-charge is atomic via WATCH/MULTI/EXEC inside
+// updateServer, so two schedulers cannot double-book the same headroom.
 func (s *RedisStore) ReserveServerResources(serverID string, cpu, memory, disk int) (*models.Server, bool, error) {
 	srv, err := s.updateServer(serverID, func(srv *models.Server) error {
 		if !srv.HasCapacity(cpu, memory, disk) {
@@ -291,6 +359,9 @@ func (s *RedisStore) ReserveServerResources(serverID string, cpu, memory, disk i
 	return current, false, nil
 }
 
+// ReleaseServerResources returns reserved capacity to the server and, when
+// completed is true, increments CompletedTasks. Counters are clamped at zero
+// to absorb any drift between reserve and release (e.g. on retried releases).
 func (s *RedisStore) ReleaseServerResources(serverID string, cpu, memory, disk int, completed bool) (*models.Server, error) {
 	return s.updateServer(serverID, func(srv *models.Server) error {
 		srv.UsedCPU -= cpu
@@ -316,6 +387,8 @@ func (s *RedisStore) ReleaseServerResources(serverID string, cpu, memory, disk i
 	})
 }
 
+// GetServer fetches the server at server:<id>. Returns redis.Nil if the
+// server was not seeded for the current session.
 func (s *RedisStore) GetServer(id string) (*models.Server, error) {
 	data, err := s.client.Get(context.Background(), "server:"+id).Result()
 	if err != nil {
@@ -325,6 +398,8 @@ func (s *RedisStore) GetServer(id string) (*models.Server, error) {
 	return &srv, json.Unmarshal([]byte(data), &srv)
 }
 
+// GetAllServers scans server:* and returns every decoded server sorted by
+// ID. Sort order is stable so the UI and scheduler iterate deterministically.
 func (s *RedisStore) GetAllServers() ([]*models.Server, error) {
 	ctx := context.Background()
 	keys, err := s.scanKeys(ctx, "server:*")
@@ -349,6 +424,8 @@ func (s *RedisStore) GetAllServers() ([]*models.Server, error) {
 
 // ── TaskResult ──────────────────────────────────────────────────────────────
 
+// StoreTaskResult persists a completed result under result:<exec_id> with
+// the same TTL as the execution it summarises.
 func (s *RedisStore) StoreTaskResult(r *models.TaskResult) error {
 	data, err := json.Marshal(r)
 	if err != nil {
@@ -357,6 +434,8 @@ func (s *RedisStore) StoreTaskResult(r *models.TaskResult) error {
 	return s.client.Set(context.Background(), "result:"+r.ExecutionID, data, executionTTL).Err()
 }
 
+// GetTaskResult returns the result at result:<exec_id>. Returns redis.Nil
+// when no result has been recorded yet or the entry has expired.
 func (s *RedisStore) GetTaskResult(executionID string) (*models.TaskResult, error) {
 	data, err := s.client.Get(context.Background(), "result:"+executionID).Result()
 	if err != nil {
@@ -366,6 +445,8 @@ func (s *RedisStore) GetTaskResult(executionID string) (*models.TaskResult, erro
 	return &result, json.Unmarshal([]byte(data), &result)
 }
 
+// GetAllTaskResults scans result:* and returns every decoded result sorted
+// by EndTime, with ExecutionID as a tiebreaker for ties at the same instant.
 func (s *RedisStore) GetAllTaskResults() ([]*models.TaskResult, error) {
 	ctx := context.Background()
 	keys, err := s.scanKeys(ctx, "result:*")
@@ -395,6 +476,8 @@ func (s *RedisStore) GetAllTaskResults() ([]*models.TaskResult, error) {
 
 // ── Workflow Instances ───────────────────────────────────────────────────────
 
+// StoreWorkflowInstance persists a workflow instance under workflow:<id>
+// with the standard execution TTL.
 func (s *RedisStore) StoreWorkflowInstance(wi *models.WorkflowInstance) error {
 	data, err := json.Marshal(wi)
 	if err != nil {

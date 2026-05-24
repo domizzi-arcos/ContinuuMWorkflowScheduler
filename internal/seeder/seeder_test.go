@@ -8,6 +8,9 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/config"
 )
 
+// TestBuildTierServersProducesUniqueProfiles guards the uniqueness invariant
+// for an edge tier: every seeded server must have a distinct (cpu, mem, disk,
+// latency) profile so the scheduler can discriminate between candidates.
 func TestBuildTierServersProducesUniqueProfiles(t *testing.T) {
 	tier := tierSeedConfig{
 		name:     "edge",
@@ -37,6 +40,9 @@ func TestBuildTierServersProducesUniqueProfiles(t *testing.T) {
 	}
 }
 
+// TestBuildTierServersKeepsFogDiskPositive pins the rule that non-edge tiers
+// (fog, cloud) must always have at least 1 GB of disk — a fog or cloud node
+// with 0 GB is treated as misconfigured by the scheduler and never receives tasks.
 func TestBuildTierServersKeepsFogDiskPositive(t *testing.T) {
 	tier := tierSeedConfig{
 		name:     "fog",
@@ -59,6 +65,10 @@ func TestBuildTierServersKeepsFogDiskPositive(t *testing.T) {
 	}
 }
 
+// TestBuildTierServersEnsuresDistinctDiskValues exercises the secondary
+// uniqueness rule: when the disk range has at least as many distinct steps
+// as the requested server count, every server within the tier should end up
+// with a distinct disk capacity (improves topology diversity for benchmarks).
 func TestBuildTierServersEnsuresDistinctDiskValues(t *testing.T) {
 	tier := tierSeedConfig{
 		name:     "edge",

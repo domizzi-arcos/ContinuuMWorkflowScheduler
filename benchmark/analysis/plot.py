@@ -3,8 +3,8 @@
 Experiment analysis and plotting for the distributed workflow scheduler.
 
 Usage:
-    ./venv/bin/python analysis/plot.py results/*.json
-    ./venv/bin/python analysis/plot.py results/
+    python analysis/plot.py results/benchmark_<timestamp>
+    python analysis/plot.py results/*.json
 
 Outputs:
     analysis/figures/<figure_name>.pdf
@@ -24,8 +24,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-
-# ── Style ──────────────────────────────────────────────────────────────────────
 
 plt.rcParams.update({
     "font.family": "serif",
@@ -53,15 +51,13 @@ FIGURES_DIR = Path(__file__).parent / "figures"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-# ── Data loading ───────────────────────────────────────────────────────────────
-
 def resolve_input_paths(args):
     """Resolve files, directories, and glob patterns from cwd or repo root."""
     if not args:
         default = REPO_ROOT / "results"
         paths = sorted(default.glob("*.json"))
         if not paths:
-            sys.exit("Usage: ./venv/bin/python analysis/plot.py results/*.json\nNo .json files found in results/")
+            sys.exit("Usage: python analysis/plot.py results/*.json\nNo .json files found in results/")
         return paths
 
     resolved = []
@@ -167,8 +163,6 @@ def summary_df(experiments):
     return pd.DataFrame(rows)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
 def algo_label(name):
     return name.replace("_", " ").title()
 
@@ -191,8 +185,6 @@ def ordered_algos(df, col="algorithm"):
     return [a for a in order if a in present] + [a for a in present if a not in order]
 
 
-# ── Figure 1 — Workflow makespan CDF ──────────────────────────────────────────
-
 def fig_makespan_cdf(wf):
     done = wf[wf["status"] == "DONE"]
     if done.empty:
@@ -213,8 +205,6 @@ def fig_makespan_cdf(wf):
     save(fig, "01_makespan_cdf")
 
 
-# ── Figure 2 — Makespan per workflow template (boxplot) ───────────────────────
-
 def fig_makespan_per_template(wf):
     done = wf[(wf["status"] == "DONE") & (wf["makespan_ms"] > 0)]
     if done.empty:
@@ -229,14 +219,13 @@ def fig_makespan_per_template(wf):
         sub = done[done["algorithm"] == algo]
         positions = [j + (i - n_algos / 2 + 0.5) * width for j in range(len(templates))]
         data = [sub[sub["template"] == t]["makespan_ms"].dropna().values / 1000 for t in templates]
-        bp = ax.boxplot(data, positions=positions, widths=width * 0.85,
-                        patch_artist=True, notch=False,
-                        boxprops=dict(facecolor=color_for(algo), alpha=0.7),
-                        medianprops=dict(color="black", linewidth=1.5),
-                        whiskerprops=dict(linewidth=1),
-                        capprops=dict(linewidth=1),
-                        flierprops=dict(marker=".", markersize=3, alpha=0.4))
-        # invisible bar for legend
+        ax.boxplot(data, positions=positions, widths=width * 0.85,
+                   patch_artist=True, notch=False,
+                   boxprops=dict(facecolor=color_for(algo), alpha=0.7),
+                   medianprops=dict(color="black", linewidth=1.5),
+                   whiskerprops=dict(linewidth=1),
+                   capprops=dict(linewidth=1),
+                   flierprops=dict(marker=".", markersize=3, alpha=0.4))
         ax.bar(0, 0, color=color_for(algo), alpha=0.7, label=algo_label(algo))
     ax.set_xticks(range(len(templates)))
     ax.set_xticklabels([t.replace("_", "\n") for t in templates])
@@ -247,18 +236,16 @@ def fig_makespan_per_template(wf):
     save(fig, "02_makespan_per_template")
 
 
-# ── Figure 3 — Total cost and energy per algorithm ────────────────────────────
-
 def fig_cost_energy(sumdf):
     algos = ordered_algos(sumdf)
     x = np.arange(len(algos))
     fig, ax1 = plt.subplots(figsize=(7, 4.5))
     ax2 = ax1.twinx()
     width = 0.35
-    bars1 = ax1.bar(x - width / 2, [sumdf[sumdf["algorithm"] == a]["cost_usd"].mean() for a in algos],
-                    width, color=[color_for(a) for a in algos], alpha=0.85, label="Cost (USD)")
-    bars2 = ax2.bar(x + width / 2, [sumdf[sumdf["algorithm"] == a]["energy_wh"].mean() for a in algos],
-                    width, color=[color_for(a) for a in algos], alpha=0.45, hatch="//", label="Energy (Wh)")
+    ax1.bar(x - width / 2, [sumdf[sumdf["algorithm"] == a]["cost_usd"].mean() for a in algos],
+            width, color=[color_for(a) for a in algos], alpha=0.85, label="Cost (USD)")
+    ax2.bar(x + width / 2, [sumdf[sumdf["algorithm"] == a]["energy_wh"].mean() for a in algos],
+            width, color=[color_for(a) for a in algos], alpha=0.45, hatch="//", label="Energy (Wh)")
     ax1.set_xticks(x)
     ax1.set_xticklabels([algo_label(a) for a in algos], rotation=15, ha="right")
     ax1.set_ylabel("Total cost (USD)", color="#333333")
@@ -269,8 +256,6 @@ def fig_cost_energy(sumdf):
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
     save(fig, "03_cost_energy")
 
-
-# ── Figure 4 — Task throughput timeline ───────────────────────────────────────
 
 def fig_throughput_timeline(tk):
     if tk.empty:
@@ -283,7 +268,6 @@ def fig_throughput_timeline(tk):
         sub = sub.sort_values("end_time")
         t0 = sub["end_time"].min()
         sub["elapsed_s"] = (sub["end_time"] - t0).dt.total_seconds()
-        # 30-second rolling window for smoothed throughput
         sub["bin"] = (sub["elapsed_s"] // 30).astype(int)
         rate = sub.groupby("bin").size().reset_index(name="count")
         rate["elapsed_s"] = rate["bin"] * 30 + 15
@@ -296,8 +280,6 @@ def fig_throughput_timeline(tk):
     ax.legend()
     save(fig, "04_throughput_timeline")
 
-
-# ── Figure 5 — Tier task distribution ─────────────────────────────────────────
 
 def fig_tier_distribution(tk, sumdf):
     algos = ordered_algos(sumdf)
@@ -322,8 +304,6 @@ def fig_tier_distribution(tk, sumdf):
     save(fig, "05_tier_distribution")
 
 
-# ── Figure 6 — Multi-objective trade-off scatter ──────────────────────────────
-
 def fig_multiobjective(sumdf):
     if sumdf.empty:
         return
@@ -332,21 +312,18 @@ def fig_multiobjective(sumdf):
     for algo in algos:
         sub = sumdf[sumdf["algorithm"] == algo]
         for _, row in sub.iterrows():
-            ms = row["avg_makespan"] / 1000  # to seconds
+            ms = row["avg_makespan"] / 1000
             cost = row["cost_usd"]
             energy = max(row["energy_wh"], 1)
             ax.scatter(ms, cost, s=energy * 3, color=color_for(algo),
                        alpha=0.75, edgecolors="white", linewidth=0.5)
-        # one entry per algorithm for legend
         ax.scatter([], [], s=80, color=color_for(algo), label=algo_label(algo), alpha=0.85)
     ax.set_xlabel("Avg workflow makespan (s)")
     ax.set_ylabel("Total cost (USD)")
-    ax.set_title("Multi-objective Trade-off\n(bubble size ∝ energy consumed)")
+    ax.set_title("Multi-objective Trade-off\n(bubble size proportional to energy)")
     ax.legend(title="Algorithm")
     save(fig, "06_multiobjective")
 
-
-# ── Figure 7 — Per-algorithm latency percentiles bar chart ────────────────────
 
 def fig_latency_bars(sumdf):
     algos = ordered_algos(sumdf)
@@ -366,8 +343,6 @@ def fig_latency_bars(sumdf):
     ax.legend()
     save(fig, "07_latency_percentiles")
 
-
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     paths = resolve_input_paths(sys.argv[1:])

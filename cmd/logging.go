@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// setupExperimentLogging installs the process-wide slog handler. When
+// EXPERIMENT_LOG_DIR is set, output is teed to both stdout and a timestamped
+// file in that directory so an unattended batch run leaves a transcript on
+// disk; otherwise stdout-only. The returned closer flushes the log file.
 func setupExperimentLogging() (func(), string, error) {
 	logDir := strings.TrimSpace(os.Getenv("EXPERIMENT_LOG_DIR"))
 	if logDir == "" {

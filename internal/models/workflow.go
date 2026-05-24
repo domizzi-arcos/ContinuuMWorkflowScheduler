@@ -22,7 +22,7 @@ type WorkflowInstance struct {
 	ID           string            `json:"id"`
 	TemplateName string            `json:"template_name"`
 	Priority     int               `json:"priority"`
-	Status       string            `json:"status"` // RUNNING | DONE
+	Status       string            `json:"status"`        // RUNNING | DONE
 	SlotExecIDs  map[string]string `json:"slot_exec_ids"` // slot ID → execution ID
 	CreatedAt    time.Time         `json:"created_at"`
 	MakespanMS   int64             `json:"makespan_ms,omitempty"` // wall time first→last task

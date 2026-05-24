@@ -18,26 +18,49 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/workflow"
 )
 
+// simulationSession owns the goroutines and channels for one experiment run.
+// The session is recreated from scratch on every restart so each run starts
+// with empty queues and freshly seeded data; the parent main goroutine holds
+// the only reference.
 type simulationSession struct {
-	store              *store.RedisStore
-	broker             *broker.Broker
-	worker             *worker.Worker
-	done               chan struct{}
-	generatorDone      chan struct{}
+	store  *store.RedisStore
+	broker *broker.Broker
+	worker *worker.Worker
+	// done is closed to signal scheduler, results collector and tracker to
+	// exit. Worker shutdown is handled separately via WaitWithTimeout so we
+	// can bound how long the drain takes.
+	done chan struct{}
+	// generatorDone is closed independently so the generator can be stopped
+	// (drain mode) without tearing down the rest of the pipeline.
+	generatorDone chan struct{}
+	// generationFinished is closed by the generator goroutine on exit so
+	// callers can observe that no further executions will be produced.
 	generationFinished chan struct{}
-	executionIDs       chan string
-	doneExecIDs        chan string
+	// executionIDs streams newly created execution IDs from generator and
+	// tracker to the scheduler. doneExecIDs streams completed execution IDs
+	// from the results collector to the workflow tracker for DAG follow-up.
+	executionIDs chan string
+	doneExecIDs  chan string
 
 	wg                sync.WaitGroup
 	stopAllOnce       sync.Once
 	stopGeneratorOnce sync.Once
 }
 
+// rabbitMQConnectTimeout bounds how long startSimulationSession will keep
+// retrying the broker handshake before giving up. rabbitMQConnectRetryDelay
+// is the pause between attempts. Both exist because docker-compose can bring
+// the app up before RabbitMQ is ready to accept connections.
 const (
 	rabbitMQConnectTimeout    = 45 * time.Second
 	rabbitMQConnectRetryDelay = 2 * time.Second
 )
 
+// startSimulationSession wires up a fresh experiment run: it connects to the
+// broker, purges queues, resets simulation keys in Redis, seeds servers and
+// tasks, then spawns the scheduler, generator, workers, results collector and
+// workflow tracker goroutines. The returned session is the sole handle the
+// caller needs to drive shutdown via StopGeneration / StopAll.
 func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *control.Controller) (*simulationSession, error) {
 	b, err := connectBrokerWithRetry(cfg.RabbitMQ.URL)
 	if err != nil {
@@ -73,7 +96,7 @@ func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *
 	}
 
 	tw := cfg.Scheduler.TOPSISWeights
-	algo := scheduler.NewAlgorithm(cfg.Scheduler.Algorithm, cfg.Scheduler.Seed, tw.Time, tw.Cost, tw.Energy)
+	algo := scheduler.NewAlgorithm(cfg.Scheduler.Algorithm, cfg.Scheduler.Seed, tw.Time, tw.Cost, tw.Energy, tw.Util)
 	sched := scheduler.New(s, b, algo, session.executionIDs, pauseCtrl)
 	gen := generator.New(s, tasks, session.executionIDs, pauseCtrl, cfg.Generator.WorkflowSeed, cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
 	session.worker = worker.New(s, b, cfg.Scheduler.Algorithm, pauseCtrl)
@@ -86,6 +109,8 @@ func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *
 		sched.Start(session.done)
 	}()
 
+	// Generator owns generationFinished: closing it on exit is the signal the
+	// drain loop watches to know no more executions will ever be produced.
 	session.wg.Add(1)
 	go func() {
 		defer session.wg.Done()
@@ -111,6 +136,9 @@ func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *
 	return session, nil
 }
 
+// connectBrokerWithRetry dials RabbitMQ until it succeeds or the timeout
+// elapses, so the app can start in parallel with the broker container
+// during docker-compose up.
 func connectBrokerWithRetry(url string) (*broker.Broker, error) {
 	deadline := time.Now().Add(rabbitMQConnectTimeout)
 	attempt := 1
@@ -143,6 +171,9 @@ func connectBrokerWithRetry(url string) (*broker.Broker, error) {
 	return nil, fmt.Errorf("timed out after %s: %w", rabbitMQConnectTimeout, lastErr)
 }
 
+// StopGeneration signals the generator to stop creating new executions while
+// leaving the scheduler, workers, results collector and tracker running so
+// in-flight work can drain. Safe to call multiple times.
 func (s *simulationSession) StopGeneration() {
 	if s == nil {
 		return
@@ -152,6 +183,9 @@ func (s *simulationSession) StopGeneration() {
 	})
 }
 
+// StopAll tears the whole session down: stops the generator, signals every
+// other goroutine via done, waits for the worker to drain (bounded by 5s) and
+// then closes the broker connection. Safe to call multiple times.
 func (s *simulationSession) StopAll() {
 	if s == nil {
 		return

@@ -6,12 +6,15 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 )
 
+// TestWorstFitName pins the algorithm identifier used in config.yaml.
 func TestWorstFitName(t *testing.T) {
 	if NewWorstFit().Name() != "worst_fit" {
 		t.Fatal("unexpected name")
 	}
 }
 
+// TestWorstFitSelectNilOnEmpty asserts Select returns nil for an empty or nil
+// candidate list, mirroring the BestFit contract so dispatcher logic is uniform.
 func TestWorstFitSelectNilOnEmpty(t *testing.T) {
 	if NewWorstFit().Select(nil, nil) != nil {
 		t.Fatal("expected nil for empty candidates")
@@ -21,6 +24,8 @@ func TestWorstFitSelectNilOnEmpty(t *testing.T) {
 	}
 }
 
+// TestWorstFitSelectSingleCandidate covers the degenerate case where only
+// one server is eligible — Select must return it unchanged.
 func TestWorstFitSelectSingleCandidate(t *testing.T) {
 	srv := &models.Server{ID: "only", MaxCPU: 4, MaxMemory: 512, MaxDisk: 5}
 	if NewWorstFit().Select(nil, []*models.Server{srv}) != srv {
@@ -28,6 +33,9 @@ func TestWorstFitSelectSingleCandidate(t *testing.T) {
 	}
 }
 
+// TestWorstFitSelectPicksLeastPacked exercises the load-spreading invariant:
+// WorstFit must always pick the server with the largest FreeCapacity,
+// independent of candidate slice ordering.
 func TestWorstFitSelectPicksLeastPacked(t *testing.T) {
 	// FreeCapacity = (MaxCPU-UsedCPU) + (MaxMemory-UsedMemory)/100 + (MaxDisk-UsedDisk)
 	// a: 1 + 1 + 1 = 3   (most packed)

@@ -1,0 +1,56 @@
+# Self-contained benchmark stack.
+# Brings up its own Redis and RabbitMQ so it does not collide with the
+# interactive runner in the project root.
+#
+#   cd benchmark
+#   docker compose up --build benchmark
+#   docker compose --profile plot run --rm plotter results/benchmark_<timestamp>
+#   docker compose down -v
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  benchmark:
+    build:
+      context: ..
+      dockerfile: benchmark/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./results:/app/results
+      - "../globus dataset:/app/globus dataset"
+    command: ["-config", "/app/config.yaml", "-duration", "120", "-servers", "5"]
+
+  plotter:
+    profiles: ["plot"]
+    build:
+      context: ./analysis
+    working_dir: /app
+    volumes:
+      - ./results:/app/results
+      - ./figures:/app/figures
+    # Override the input path at run time, e.g.:
+    #   docker compose --profile plot run --rm plotter results/benchmark_<ts>
+    command: ["results"]

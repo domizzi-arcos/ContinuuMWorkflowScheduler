@@ -1,3 +1,6 @@
+// Package config parses the YAML configuration file (default: config.yaml)
+// into typed structs consumed by the rest of the simulation. It exposes Load
+// and Validate, plus the IntRange helper used for randomized range sampling.
 package config
 
 import (
@@ -9,14 +12,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// IntRange describes a discrete inclusive integer range [Min, Max] with the
+// given Step. It accepts either a bare scalar (treated as Min==Max) or a
+// {min, max, step} mapping in YAML.
 type IntRange struct {
 	Min  int `yaml:"min"`
 	Max  int `yaml:"max"`
-	Step int `yaml:"step"`
+	Step int `yaml:"step"` // grid spacing between sampleable values; ApplyDefaults clamps to >=1
 
+	// configured tracks whether the value was explicitly set in YAML so
+	// ApplyDefaults can distinguish "user wrote 0" from "user omitted it".
 	configured bool
 }
 
+// UnmarshalYAML decodes an IntRange from either a scalar int (Min=Max=value,
+// Step=1) or a mapping with explicit min/max/step keys.
 func (r *IntRange) UnmarshalYAML(value *yaml.Node) error {
 	r.configured = true
 	switch value.Kind {
@@ -44,6 +54,9 @@ func (r *IntRange) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
+// ApplyDefaults fills in any unset bounds or step using the provided fallback
+// values, and normalizes the range (swaps Min/Max if inverted, mirrors a
+// single specified bound onto the other, clamps Step > 0).
 func (r *IntRange) ApplyDefaults(min, max, step int) {
 	if !r.configured {
 		r.Min = min
@@ -65,35 +78,50 @@ func (r *IntRange) ApplyDefaults(min, max, step int) {
 	}
 }
 
+// ServerTierConfig describes the capacity envelope for one tier (Edge, Fog, or
+// Cloud). Count servers will be sampled from the cross-product of the ranges.
 type ServerTierConfig struct {
 	Count       int      `yaml:"count"`
 	CPU         IntRange `yaml:"cpu"`
 	Memory      IntRange `yaml:"memory"`
 	Disk        IntRange `yaml:"disk"`
-	WANLatency  IntRange `yaml:"wan_latency"`
+	WANLatency  IntRange `yaml:"wan_latency"`   // round-trip latency in ms from this tier to the orchestrator
 	CostPerHour float64  `yaml:"cost_per_hour"` // USD per server-hour
 	PowerWatts  IntRange `yaml:"power_watts"`   // power draw in W
 }
 
+// ServersConfig groups the three tier specs and a shared RNG seed used by the
+// seeder package to randomize server capacities.
 type ServersConfig struct {
-	Seed  int64            `yaml:"seed"`
+	Seed  int64            `yaml:"seed"` // 0 = non-deterministic (time-based)
 	Edge  ServerTierConfig `yaml:"edge"`
 	Fog   ServerTierConfig `yaml:"fog"`
 	Cloud ServerTierConfig `yaml:"cloud"`
 }
 
+// TOPSISWeights holds the per-criterion weights used by the TOPSIS scheduler.
+// Time+Cost+Energy must sum to 1.0 (validated); Util is an independent fourth
+// criterion left out of that sum so the §6 weight-sensitivity analysis stays
+// valid.
 type TOPSISWeights struct {
-	Time   float64 `yaml:"time"`
-	Cost   float64 `yaml:"cost"`
-	Energy float64 `yaml:"energy"`
+	Time   float64 `yaml:"time"`   // weight on execution time (lower is better)
+	Cost   float64 `yaml:"cost"`   // weight on $-cost per task (lower is better)
+	Energy float64 `yaml:"energy"` // weight on energy draw (lower is better)
+	// Util weights a fourth criterion: post-placement capacity utilisation
+	// (lower is better). Independent of the time/cost/energy budget so the
+	// existing 3-weight semantics in §6 weight sensitivity remain valid;
+	// set to 0 to disable. Sensible non-zero default is 0.25.
+	Util float64 `yaml:"util"`
 }
 
+// SchedulerConfig selects the placement algorithm and parameterizes it.
 type SchedulerConfig struct {
-	Algorithm     string        `yaml:"algorithm"`
-	Seed          int64         `yaml:"seed"`
-	TOPSISWeights TOPSISWeights `yaml:"topsis_weights"`
+	Algorithm     string        `yaml:"algorithm"`      // round_robin | random | best_fit | worst_fit | topsis
+	Seed          int64         `yaml:"seed"`           // 0 = non-deterministic (time-based)
+	TOPSISWeights TOPSISWeights `yaml:"topsis_weights"` // only consulted when Algorithm == "topsis"
 }
 
+// GeneratorConfig controls how the synthetic workload is produced.
 type GeneratorConfig struct {
 	TaskCount         int    `yaml:"task_count"`
 	Seed              int64  `yaml:"seed"`
@@ -105,25 +133,30 @@ type GeneratorConfig struct {
 	PriorityMax       int    `yaml:"priority_max"`
 }
 
+// RedisConfig points the store package at a Redis instance.
 type RedisConfig struct {
 	Address string `yaml:"address"`
 	DB      int    `yaml:"db"`
 }
 
+// RabbitMQConfig points the worker/results goroutines at an AMQP broker.
 type RabbitMQConfig struct {
 	URL string `yaml:"url"`
 }
 
+// WebConfig configures the HTTP/WebSocket dashboard server.
 type WebConfig struct {
 	Port int `yaml:"port"`
 }
 
+// ExperimentConfig bounds the simulation lifetime and logging cadence.
 type ExperimentConfig struct {
 	DurationSeconds    int  `yaml:"duration_seconds"`
 	ProgressLogSeconds int  `yaml:"progress_log_seconds"`
 	ExitOnComplete     bool `yaml:"exit_on_complete"` // exit process when experiment drains (for batch runs)
 }
 
+// Config is the root object decoded from the YAML file.
 type Config struct {
 	Servers    ServersConfig    `yaml:"servers"`
 	Scheduler  SchedulerConfig  `yaml:"scheduler"`
@@ -134,6 +167,9 @@ type Config struct {
 	Experiment ExperimentConfig `yaml:"experiment"`
 }
 
+// Load reads the YAML file at path, applies defaults, validates the result,
+// and returns the populated Config. Any error wraps the underlying cause so
+// the caller can present it to the user.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -150,6 +186,10 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Validate checks that required fields are set, that the chosen scheduler
+// algorithm is one of the known names, that the TOPSIS time/cost/energy
+// weights sum to 1.0 (within a small tolerance), and that the auxiliary Util
+// weight is non-negative.
 func (cfg *Config) Validate() error {
 	if cfg.Redis.Address == "" {
 		return errors.New("redis.address is required")
@@ -174,21 +214,32 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("generator.priority_min (%d) > priority_max (%d)", cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
 	}
 	tw := cfg.Scheduler.TOPSISWeights
+	// Time/Cost/Energy form a probability simplex; allow a 1e-3 slack for
+	// human-written YAML that says 0.4/0.3/0.3.
 	if sum := tw.Time + tw.Cost + tw.Energy; math.Abs(sum-1.0) > 0.001 {
-		return fmt.Errorf("scheduler.topsis_weights must sum to 1.0, got %.3f", sum)
+		return fmt.Errorf("scheduler.topsis_weights time+cost+energy must sum to 1.0, got %.3f", sum)
+	}
+	if tw.Util < 0 {
+		return fmt.Errorf("scheduler.topsis_weights.util must be >= 0, got %.3f", tw.Util)
 	}
 	return nil
 }
 
+// applyDefaults fills in sensible values for any field the user left blank.
+// It is called from Load before Validate so the user only sees errors about
+// values they explicitly set wrong, not about missing defaults.
 func applyDefaults(cfg *Config) {
 	if cfg.Scheduler.Algorithm == "" {
 		cfg.Scheduler.Algorithm = "round_robin"
 	}
-	// Default TOPSIS weights (only applied when all three are zero)
+	// Default TOPSIS weights are only applied when the user supplied no
+	// weights at all (all four zero). Any non-zero entry means the user
+	// intentionally specified their own simplex and we should not overwrite.
 	if cfg.Scheduler.TOPSISWeights.Time == 0 &&
 		cfg.Scheduler.TOPSISWeights.Cost == 0 &&
-		cfg.Scheduler.TOPSISWeights.Energy == 0 {
-		cfg.Scheduler.TOPSISWeights = TOPSISWeights{Time: 0.4, Cost: 0.3, Energy: 0.3}
+		cfg.Scheduler.TOPSISWeights.Energy == 0 &&
+		cfg.Scheduler.TOPSISWeights.Util == 0 {
+		cfg.Scheduler.TOPSISWeights = TOPSISWeights{Time: 0.4, Cost: 0.3, Energy: 0.3, Util: 0.25}
 	}
 	applyServerTierDefaults(&cfg.Servers.Edge, 10, IntRange{Min: 1, Max: 2, Step: 1}, IntRange{Min: 128, Max: 768, Step: 128}, IntRange{Min: 0, Max: 10, Step: 1}, IntRange{Min: 3, Max: 12, Step: 1}, 0.02, IntRange{Min: 10, Max: 25, Step: 5})
 	applyServerTierDefaults(&cfg.Servers.Fog, 4, IntRange{Min: 4, Max: 8, Step: 1}, IntRange{Min: 2048, Max: 8192, Step: 512}, IntRange{Min: 40, Max: 140, Step: 10}, IntRange{Min: 20, Max: 45, Step: 5}, 0.25, IntRange{Min: 100, Max: 200, Step: 25})
@@ -219,6 +270,9 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
+// applyServerTierDefaults fills in count, ranges, and cost for one tier from
+// the supplied fallbacks, delegating to IntRange.ApplyDefaults for the ranges
+// so partially-configured ranges are normalized consistently.
 func applyServerTierDefaults(tier *ServerTierConfig, defaultCount int, cpu, memory, disk, latency IntRange, defaultCost float64, power IntRange) {
 	if tier.Count <= 0 {
 		tier.Count = defaultCount

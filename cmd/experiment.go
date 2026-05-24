@@ -13,6 +13,9 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 )
 
+// tierSnapshot aggregates the live state of every server in a single tier
+// (EDGE / FOG / CLOUD) at one point in time. Used to drive both periodic
+// progress logs and the final summary.
 type tierSnapshot struct {
 	Nodes          int
 	ActiveTasks    int
@@ -25,6 +28,8 @@ type tierSnapshot struct {
 	MaxDisk        int
 }
 
+// serverSnapshot is the per-server slice used to compute the top-N
+// "busiest servers" line in the experiment summary.
 type serverSnapshot struct {
 	ID             string
 	Type           string
@@ -32,19 +37,26 @@ type serverSnapshot struct {
 	ActiveTasks    int
 }
 
+// experimentSnapshot is a point-in-time view of the whole simulation:
+// task definition count, execution counts bucketed by status, the number of
+// persisted results, per-tier aggregates and the top servers by load.
+// Snapshots are pure data and safe to log or compare across ticks.
 type experimentSnapshot struct {
-	TaskDefinitions    int
-	Executions         int
-	BlockedExecutions  int
-	PendingExecutions  int
-	QueuedExecutions   int
-	RunningExecutions  int
-	DoneExecutions     int
-	Results            int
-	Tiers              map[string]tierSnapshot
-	TopServers         []serverSnapshot
+	TaskDefinitions   int
+	Executions        int
+	BlockedExecutions int
+	PendingExecutions int
+	QueuedExecutions  int
+	RunningExecutions int
+	DoneExecutions    int
+	Results           int
+	Tiers             map[string]tierSnapshot
+	TopServers        []serverSnapshot
 }
 
+// envInt reads an int from the named environment variable, falling back to
+// the given default when the variable is unset or unparseable. A warning is
+// logged on parse failure so misconfiguration is visible without aborting.
 func envInt(key string, fallback int) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -58,6 +70,10 @@ func envInt(key string, fallback int) int {
 	return value
 }
 
+// collectExperimentSnapshot scrapes Redis for the current state of tasks,
+// executions, servers and results and folds them into a single
+// experimentSnapshot. This is the workhorse called once per tick of the
+// progress loop and again at shutdown to produce the summary.
 func collectExperimentSnapshot(s *store.RedisStore) (*experimentSnapshot, error) {
 	tasks, err := s.GetAllTasks()
 	if err != nil {
@@ -141,6 +157,10 @@ func collectExperimentSnapshot(s *store.RedisStore) (*experimentSnapshot, error)
 	return snapshot, nil
 }
 
+// experimentDrained reports whether every in-flight execution has reached
+// DONE and the results collector has caught up. The Results>=DoneExecutions
+// check guards against finishing the run before the results queue has been
+// fully consumed and persisted.
 func experimentDrained(snapshot *experimentSnapshot) bool {
 	return snapshot.BlockedExecutions == 0 &&
 		snapshot.PendingExecutions == 0 &&
@@ -149,6 +169,10 @@ func experimentDrained(snapshot *experimentSnapshot) bool {
 		snapshot.Results >= snapshot.DoneExecutions
 }
 
+// logExperimentProgress emits a single structured log line summarising the
+// snapshot for the given experiment phase (e.g. "active", "drain"). Called
+// on every progress tick so a tail of the log doubles as a poor-man's
+// dashboard.
 func logExperimentProgress(elapsed time.Duration, phase string, snapshot *experimentSnapshot) {
 	elapsed = elapsed.Round(time.Second)
 	edge := snapshot.Tiers["EDGE"]
@@ -171,6 +195,11 @@ func logExperimentProgress(elapsed time.Duration, phase string, snapshot *experi
 	)
 }
 
+// logExperimentSummary prints the end-of-run report: overall counts,
+// throughput, per-tier resource usage, latency percentiles and the busiest
+// servers. activeWall is the wall-clock time the generator was producing
+// load (drain time excluded) so the throughput figure is meaningful.
+// reason explains why the run ended (timeout, signal, drained, ...).
 func logExperimentSummary(s *store.RedisStore, activeWall time.Duration, reason string) {
 	snapshot, err := collectExperimentSnapshot(s)
 	if err != nil {
@@ -250,6 +279,9 @@ func completionRate(snapshot *experimentSnapshot) float64 {
 	return float64(snapshot.DoneExecutions) * 100 / float64(snapshot.Executions)
 }
 
+// computeTaskDurations extracts the effective per-task wall durations from
+// the persisted results and returns them sorted ascending so the same slice
+// can feed both percentile and min/max lookups without re-sorting.
 func computeTaskDurations(results []*models.TaskResult) []time.Duration {
 	if len(results) == 0 {
 		return nil
@@ -268,6 +300,9 @@ func computeTaskDurations(results []*models.TaskResult) []time.Duration {
 	return durations
 }
 
+// percentileDuration returns the p-th percentile (0..1) of the already-sorted
+// values using nearest-rank indexing — good enough for telemetry and avoids
+// the float arithmetic of a true linear-interpolated percentile.
 func percentileDuration(values []time.Duration, p float64) time.Duration {
 	if len(values) == 0 {
 		return 0

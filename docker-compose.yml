@@ -43,8 +43,6 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    env_file:
-      - .env
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./logs:/root/logs
@@ -52,6 +50,10 @@ services:
       - "./globus dataset:/root/globus dataset"
     environment:
       CONFIG_PATH: /app/config.yaml
+      # Override the values in config.yaml here, or leave them out to use defaults.
+      EXPERIMENT_DURATION_SECONDS: "180"
+      EXPERIMENT_PROGRESS_LOG_SECONDS: "10"
+      EXPERIMENT_LOG_DIR: /root/logs
 
 volumes:
   redis_data:

@@ -6,12 +6,15 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 )
 
+// TestRandomName pins the algorithm identifier used in config.yaml.
 func TestRandomName(t *testing.T) {
 	if NewRandom(1).Name() != "random" {
 		t.Fatal("unexpected name")
 	}
 }
 
+// TestRandomSelectNilOnEmpty guards that an empty or nil candidate slice
+// produces a nil server, not a panic on an out-of-bounds rng.Intn.
 func TestRandomSelectNilOnEmpty(t *testing.T) {
 	r := NewRandom(42)
 	if r.Select(nil, nil) != nil {
@@ -22,6 +25,9 @@ func TestRandomSelectNilOnEmpty(t *testing.T) {
 	}
 }
 
+// TestRandomSelectReturnsCandidateFromList samples Select 20 times and
+// asserts every return value belongs to the original candidate slice — no
+// off-by-one or aliasing should ever produce a foreign server.
 func TestRandomSelectReturnsCandidateFromList(t *testing.T) {
 	servers := []*models.Server{
 		{ID: "a"},
@@ -41,6 +47,9 @@ func TestRandomSelectReturnsCandidateFromList(t *testing.T) {
 	}
 }
 
+// TestRandomSelectIsDeterministicWithSameSeed pins reproducibility: two
+// Random schedulers built with the same seed must produce identical
+// sequences. This is what makes config.servers.seed!=0 runs replayable.
 func TestRandomSelectIsDeterministicWithSameSeed(t *testing.T) {
 	servers := []*models.Server{
 		{ID: "x"},
@@ -58,6 +67,9 @@ func TestRandomSelectIsDeterministicWithSameSeed(t *testing.T) {
 	}
 }
 
+// TestRandomSelectDifferentSeedsProduceDifferentSequences is a sanity check:
+// independent seeds must not produce identical sequences over 20 trials.
+// Identical sequences would indicate the seed is being ignored.
 func TestRandomSelectDifferentSeedsProduceDifferentSequences(t *testing.T) {
 	servers := []*models.Server{
 		{ID: "a"},

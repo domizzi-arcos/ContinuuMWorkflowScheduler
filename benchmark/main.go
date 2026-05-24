@@ -67,7 +67,7 @@ func main() {
 	}
 
 	slog.Info("benchmark complete", "output", outDir)
-	fmt.Printf("\nResults saved to: %s\nGenerate plots:   python scripts/plot_results.py %s\n", outDir, outDir)
+	fmt.Printf("\nResults saved to: %s\nGenerate plots:   python analysis/plot.py %s\n", outDir, outDir)
 }
 
 type benchSession struct {
@@ -135,7 +135,7 @@ func runAlgorithm(
 
 	pauseCtrl := control.New()
 	tw := cfg.Scheduler.TOPSISWeights
-	algoImpl := scheduler.NewAlgorithm(cfg.Scheduler.Algorithm, cfg.Scheduler.Seed, tw.Time, tw.Cost, tw.Energy)
+	algoImpl := scheduler.NewAlgorithm(cfg.Scheduler.Algorithm, cfg.Scheduler.Seed, tw.Time, tw.Cost, tw.Energy, tw.Util)
 	sched := scheduler.New(s, b, algoImpl, sess.execIDs, pauseCtrl)
 	gen := generator.New(s, tasks, sess.execIDs, pauseCtrl, cfg.Generator.WorkflowSeed, cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
 	w := worker.New(s, b, cfg.Scheduler.Algorithm, pauseCtrl)
@@ -167,12 +167,10 @@ func runAlgorithm(
 
 	startedAt := time.Now()
 
-	// Run for the configured duration, then stop generation
 	time.Sleep(runDuration)
 	sess.stopGeneration()
 	<-sess.genFinished
 
-	// Drain: wait for all in-flight tasks to complete (up to 3 minutes)
 	drainDeadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(drainDeadline) {
 		if drained, _ := isDrained(s); drained {

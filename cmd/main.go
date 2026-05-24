@@ -1,3 +1,7 @@
+// Package main is the entry point for the distributed workflow scheduler
+// simulation. It wires together the Redis store, RabbitMQ broker, scheduling
+// session, web dashboard and experiment telemetry, then drives the run with a
+// ticker loop until the configured duration expires or SIGINT/SIGTERM arrives.
 package main
 
 import (
@@ -69,6 +73,8 @@ func main() {
 	}
 	slog.Info("connected to Redis")
 
+	// appDone is closed exactly once on shutdown so the web server (and any
+	// other long-lived goroutine that selects on it) can unwind cleanly.
 	appDone := make(chan struct{})
 	pauseCtrl := control.New()
 	session, err := startSimulationSession(redisStore, cfg, pauseCtrl)
@@ -77,6 +83,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// stateMu guards sessionActive and durationStopRequested. They are read
+	// from every tick of the main loop and written from both this loop and
+	// the dashboard-triggered restart path.
 	var stateMu sync.RWMutex
 	sessionActive := true
 	durationStopRequested := false
@@ -99,6 +108,9 @@ func main() {
 		return web.RuntimeState{Status: "running", Active: true}
 	}
 
+	// restartRequests funnels dashboard-driven restart requests onto the main
+	// loop so the session lifecycle stays single-threaded. Each request ships
+	// a reply channel; the handler blocks on it to surface success or error.
 	restartRequests := make(chan chan error, 1)
 	restartFunc := func() error {
 		reply := make(chan error, 1)
@@ -112,6 +124,8 @@ func main() {
 	slog.Info("scheduler ready", "dashboard", fmt.Sprintf("http://localhost:%d", cfg.Web.Port))
 
 	startedAt := time.Now().UTC()
+	// SIGINT/SIGTERM are routed here so we can run finishSession and flush
+	// the result export before the process exits rather than dropping mid-run.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
@@ -191,6 +205,12 @@ func main() {
 			}
 			logExperimentProgress(pauseCtrl.ActiveElapsed(startedAt), phase, snapshot)
 		case <-drainTicker.C:
+			// Drain-on-duration-expiry: once the active wall-clock elapsed
+			// crosses the configured duration we stop the generator (no new
+			// executions) but keep the scheduler, workers and results
+			// collector running until everything in flight is finished. The
+			// run is only declared complete when no executions remain in
+			// BLOCKED/PENDING/QUEUED/RUNNING and every DONE has a result.
 			stateMu.RLock()
 			active := sessionActive
 			stopped := durationStopRequested

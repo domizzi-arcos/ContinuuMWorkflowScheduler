@@ -1,11 +1,35 @@
+# Environment / secrets
 .env
+.env.local
+config.local.yaml
+
+# macOS
 .DS_Store
-*.pyc
-__pycache__/
-venv/
+
+# Go build artefacts
+*.test
+*.out
+/bin/
+/dist/
+/tmp/
+
+# Runtime outputs (re-created on every simulation run)
 logs/
-/results/
-analysis/figures/
-*.pdf
+results/
+figures/
 *.log
-.worktrees/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local AI-tool scratch files
+AGENTS.md
+*-review.md
+.Rhistory
+
+# Large external datasets (track via download script / Git LFS, not Git)
+globus dataset/*.pdf
+globus dataset/*.csv
