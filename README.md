@@ -88,6 +88,21 @@ cp .env.example .env
 go test ./...
 ```
 
+The store tests run against an in-process `miniredis`, so `go test ./...` needs no external services.
+
+---
+
+## Reproducing the thesis results
+
+The full experimental campaign reported in the thesis (Chapter 6--7) is reproducible from this repository:
+
+1. **Dataset.** The enriched workload CSV (262 MB) is not committed. Either copy `GlobusComputeDataset-v1-enriched.csv` into `globus dataset/`, or regenerate it from the public Globus Compute dataset with `python3 "globus dataset/enrich_dataset.py"` (see `globus dataset/WHERE-IS-THE-DATA.md`).
+2. **Grid campaign.** `make reproduce-grid` (equivalent to `python3 scripts/grid_benchmark.py --skip-topsis-weights --seeds 1,2,3`) rebuilds the binary per combination and sweeps the 24-cell grid (8 topologies x 3 capacity profiles) under seeds {1,2,3}: 72 binary executions, 360 algorithm runs, ~21.7 h of wall time. Every run writes a JSON summary; a `manifest.json` records each combination, its configuration, and elapsed time.
+3. **Figures.** `make plots GRID_DIR=results/grid_<timestamp>` regenerates the comparison figures used in the thesis from the campaign directory.
+
+Seeding spans all four random sources (server capacities, random scheduler, workflow shapes, task sampling) and every policy breaks ties by sorted server ID, so re-running with the same seeds reproduces the campaign bit-for-bit. `config.local.yaml` holds the exact base configuration used by the thesis campaign; `config.yaml` is the interactive-run default (120 s window, dashboard-friendly).
+
+
 The five scheduling algorithms each have table-driven unit tests covering the empty/single-candidate paths and their selection invariants (packing, rotation, seed determinism, TOPSIS dominance, util-weight saturation fix). Seeder uniqueness rules are also covered.
 
 ---
