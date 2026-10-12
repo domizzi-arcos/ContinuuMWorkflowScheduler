@@ -92,3 +92,13 @@ make analysis GRID_DIRS="$(ls -d results/c3_cluster/task_*)"
 - **Overrides.** `ALGORITHMS`, `WORKLOAD_FLAGS` (default: the G2 options),
   `EXTRA_FLAGS` (e.g. `--drain 180`), `SEEDS`, `OUT_ROOT`, `SIF_DIR`,
   `PYTHON`, `BINARY` are read from the environment (`sbatch --export=ALL,...`).
+- **Proxies.** Not needed: every connection is plain TCP to 127.0.0.1 and
+  nothing uses HTTP. If your site requires it anyway, `export
+  no_proxy=localhost,127.0.0.1,...` before `sbatch` (Slurm passes the
+  environment to the job by default).
+- **Services fail to start.** The error prints the last lines of the
+  Redis/RabbitMQ log. To inspect everything, rerun one task with
+  `KEEP_STATE=1` (the state directory is then kept and its path printed),
+  and raise `RABBITMQ_START_TIMEOUT` (default 300 s) if the images live on a
+  slow shared filesystem. Set `TMPDIR` to node-local disk if it points at
+  Lustre or NFS.

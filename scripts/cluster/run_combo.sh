@@ -15,6 +15,8 @@
 #   ALGORITHMS     comma-separated subset (default: all, as in the grid script)
 #   WORKLOAD_FLAGS [--demand-scale --drop-unschedulable --max-duration-ms 30000]
 #   EXTRA_FLAGS    any further grid_benchmark.py flags (e.g. --drain 180)
+#   RABBITMQ_START_TIMEOUT  seconds to wait for RabbitMQ [300]
+#   KEEP_STATE=1   keep the services' state and logs after the run (debugging)
 set -euo pipefail
 
 TOPOLOGY=${1:?topology} CAPACITY=${2:?capacity} SEED=${3:?seed} OUT_ROOT=${4:?out root}
@@ -39,7 +41,7 @@ fi
 
 STATE=$(mktemp -d "${TMPDIR:-/tmp}/wfsched_svc.XXXXXX")
 source "$REPO/scripts/cluster/services.sh"
-trap 'services_stop "$STATE"; rm -rf "$STATE"' EXIT
+trap 'services_stop "$STATE"; if [ "${KEEP_STATE:-0}" = 1 ]; then echo "services state kept in $STATE"; else rm -rf "$STATE"; fi' EXIT
 
 # Find 4 free consecutive ports (other jobs may share the node).
 base=${PORT_BASE:-$((20000 + 10 * (${SLURM_ARRAY_TASK_ID:-0} % 1000)))}
@@ -47,7 +49,7 @@ for attempt in 1 2 3 4 5; do
   if services_start "$base" "$STATE"; then break; fi
   services_stop "$STATE"
   [ "$attempt" = 5 ] && { echo "error: could not start services" >&2; exit 1; }
-  base=$((base + 10000 + RANDOM % 5000))
+  base=$((20000 + (base - 20000 + 3000 + 10 * (RANDOM % 300)) % 40000))  # stays in 20000-59999
 done
 
 # Per-job base config: the campaign base with this job's endpoints.

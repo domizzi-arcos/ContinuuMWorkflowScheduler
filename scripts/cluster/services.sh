@@ -18,6 +18,12 @@ _port_free() {
   ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
 
+_fail() {  # message log
+  echo "services: $1 (see $2); last lines of the log:" >&2
+  tail -n 40 "$2" 2>/dev/null | sed 's/^/  | /' >&2
+  return 1
+}
+
 _wait_port() {  # port timeout_s
   local t=0
   until ! _port_free "$1"; do
@@ -47,8 +53,7 @@ services_start() {
 
   local node="rabbit_${base}@localhost"
   apptainer exec --cleanenv --containall --pid \
-    --bind "$dir/rabbitmq/home:/var/lib/rabbitmq" \
-    --env HOME=/var/lib/rabbitmq \
+    --home "$dir/rabbitmq/home:/var/lib/rabbitmq" \
     --env RABBITMQ_NODENAME="$node" \
     --env RABBITMQ_NODE_IP_ADDRESS=127.0.0.1 \
     --env RABBITMQ_NODE_PORT="$amqp_port" \
@@ -62,11 +67,11 @@ services_start() {
   echo $! > "$dir/rabbitmq.pid"
 
   if ! _wait_port "$redis_port" 60; then
-    echo "services: Redis did not open port $redis_port (see $dir/redis.log)" >&2
+    _fail "Redis did not open port $redis_port" "$dir/redis.log"
     return 1
   fi
-  if ! _wait_port "$amqp_port" 120; then
-    echo "services: RabbitMQ did not open port $amqp_port (see $dir/rabbitmq.log)" >&2
+  if ! _wait_port "$amqp_port" "${RABBITMQ_START_TIMEOUT:-300}"; then
+    _fail "RabbitMQ did not open port $amqp_port within ${RABBITMQ_START_TIMEOUT:-300} s" "$dir/rabbitmq.log"
     return 1
   fi
   export REDIS_ADDR="localhost:$redis_port"
