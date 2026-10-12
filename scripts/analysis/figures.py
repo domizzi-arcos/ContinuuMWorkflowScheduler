@@ -88,11 +88,13 @@ def cost_vs_makespan(runs: pd.DataFrame, out_dir: str) -> str:
     fig, ax = plt.subplots(figsize=(SINGLE_COL_IN, 2.6))
     for a in algorithms.ordered(cm["algorithm"].unique()):
         g = cm[cm.algorithm == a]
-        hollow = a in algorithms.HOLLOW
+        marker = algorithms.MARKERS.get(a, "o")
+        style = {"color": algorithms.color(a)}  # line-only markers (x) take a plain colour
+        if marker not in ("x", "+", "1", "2", "3", "4"):
+            style = {"facecolors": "none" if a in algorithms.HOLLOW else algorithms.color(a),
+                     "edgecolors": algorithms.color(a)}
         ax.scatter(g[stats.METRICS["makespan"]] / 1000, g[stats.METRICS["cost"]],
-                   marker=algorithms.MARKERS.get(a, "o"), s=18, linewidths=0.8,
-                   facecolors="none" if hollow else algorithms.color(a),
-                   edgecolors=algorithms.color(a), label=algorithms.label(a))
+                   marker=marker, s=18, linewidths=0.8, label=algorithms.label(a), **style)
     ax.set_xlabel("Mean workflow makespan (s)")
     ax.set_ylabel("Total cost per run (USD)")
     ax.legend(ncol=2, frameon=False, markerscale=1.2, handletextpad=0.2, columnspacing=0.8)

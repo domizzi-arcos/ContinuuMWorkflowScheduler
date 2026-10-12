@@ -361,3 +361,70 @@ End state empty for both (0 pending/blocked/queued/running). Audit join:
 0 incomplete, 0 predicted infeasible, 0 template mismatches. Per-run wall
 time ≈ 30 + 46 + 3 ≈ 79 s here (v1: 213 s); other combos will differ, so
 WP6 estimates should use measured times from C1.
+
+## WP5 — Load axis
+
+**Skipped** (user, 2026-10-12): cuttable; time goes to WP6/C1. Campaign C4
+is therefore not available. Labels already carry `interval_ms` = 2000 and
+`load.py` parses `_iv<ms>`, so WP5 can be added later without schema changes.
+
+## WP6 — Orchestration
+
+- `grid_benchmark.py`: `--algorithms` (→ `-algorithms`), `--topologies`,
+  `--capacities`, `--drain` (→ `-drain`), `--tag` (dir
+  `results/grid_<UTC>_<tag>`); `--emit-configs-only` from WP1; workload
+  flags from WP4. Combo IDs unchanged. `--interval-ms` not added (WP5
+  skipped); `--parallel` not implemented (optional).
+- Options that change what runs are saved to `grid_options.json`; a
+  `--resume` with different options is refused (tested).
+- Estimate = runs × (duration + drain + 3 s), an upper bound now that runs
+  drain early.
+
+### C1 pilot (`results/grid_20261012_112405_c1/`)
+
+```
+python3 scripts/grid_benchmark.py --seeds 1 --skip-topsis-weights \
+  --topologies uniform_m --capacities medium \
+  --demand-scale --drop-unschedulable --max-duration-ms 30000 --tag c1
+```
+
+10 policies, exit 0, 10 min 41 s (≈ 64 s per run; every run drained in
+31–33 s). All 15 workflows and 75 tasks completed under every policy.
+
+| Policy | Cost ($) | Energy (Wh) | Makespan (ms) | Edge/Fog/Cloud tasks |
+|---|---|---|---|---|
+| round_robin | 0.0371 | 13.30 | 13,902 | 18/27/30 |
+| random | 0.0370 | 11.43 | 12,252 | 21/23/31 |
+| best_fit | 0.0108 | 5.24 | 12,207 | 63/9/3 |
+| worst_fit | 0.0716 | 19.07 | 12,332 | 0/0/75 |
+| topsis | 0.0149 | 7.69 | 12,192 | 2/70/3 |
+| min_cost | 0.0108 | 4.54 | 12,207 | 63/9/3 |
+| min_energy | 0.0108 | 4.33 | 12,176 | 63/9/3 |
+| eft | 0.0108 | 4.75 | 12,208 | 63/9/3 |
+| weighted_sum | 0.0148 | 7.61 | 12,185 | 33/39/3 |
+| topsis_u0 | 0.0108 | 4.33 | 12,207 | 63/9/3 |
+
+Descriptive only (one configuration, one seed, n = 1). In this cell TOPSIS
+costs ≈ 38% more and uses ≈ 78% more energy than min_cost / min_energy and
+its own no-utilisation ablation; the utilisation criterion moves 70 of 75
+tasks to fog. Makespan differs by < 1.5% except round_robin (+14%). No
+policy reproduces any v1 figure here; Track B has no v1 comparison.
+
+Determinism: the analysis run twice on C1 gives byte-identical CSV, LaTeX
+and PDF outputs.
+
+## WP7 — Analysis pipeline
+
+`scripts/analysis/{load,stats,figures,latex,run}.py`, `make analysis
+GRID_DIRS=... [AUDIT=...]`, `make pytest` (14 tests). Outputs:
+`runs/tasks/workflows.csv`, `tables/*.csv` (grand mean, wins with explicit
+ties, tier share, normalised ratios with bootstrap CIs, paired Wilcoxon +
+Holm, matched-workflow makespan/response, completion, per-tier, power
+choice, queueing delay, feasibility join), four PDFs, `numbers.tex` +
+`tab_results/tab_tiers/tab_stats.tex` (into `paper/generated/` when
+`paper/` exists).
+
+**Validation against the v1 paper table could not run**: no v1 result
+JSON exists locally (G0). The table in the plan remains unchecked; if the
+v1 grid directories are found, run `make analysis GRID_DIRS=<v1 grid>` and
+compare.
