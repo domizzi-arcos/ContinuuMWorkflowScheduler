@@ -198,3 +198,15 @@ large 9.67). The paper reports 6.5–6.6 completed per run. If the rebuilt
 dataset matches the original, capacity + time infeasibility account for
 ≈ 98% of incomplete workflows (8.31 of ≈ 8.45). Without the time bound,
 capacity alone explains 4.28 per run (≈ 51%); time alone 4.03 (≈ 48%).
+
+### GATE G1 decisions (user, 2026-10-12)
+
+- Track: **B** (unchanged from G0).
+- Capacity: **`generator.demand_scale`** (WP4 preferred option).
+- Time (new, not in the original plan): **cap task durations** via a new
+  option `generator.max_duration_ms` (default 0 = off), applied after
+  sampling so the RNG stream is unchanged. The cap value (proposed 30 s) is
+  confirmed at GATE G2 with the audit and a pilot. Rationale: durations are
+  bimodal (90% of sampled templates < 5.5 s, ~8% at 3.5–16 min), so a cap
+  touches ~8% of templates and makes every workflow completable, letting
+  runs drain early.
