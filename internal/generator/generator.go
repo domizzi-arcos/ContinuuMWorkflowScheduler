@@ -14,6 +14,10 @@ import (
 
 const workflowSubmissionInterval = 2 * time.Second
 
+// SubmissionInterval is the fixed gap between workflow submissions; workflow
+// k of a run is created k intervals after generation starts.
+func SubmissionInterval() time.Duration { return workflowSubmissionInterval }
+
 // Generator instantiates workflow instances from the three templates at a
 // fixed rate and streams the entry execution IDs to the scheduler channel.
 type Generator struct {
