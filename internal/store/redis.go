@@ -171,6 +171,7 @@ func (s *RedisStore) CreateExecution(taskID string, createdAt time.Time) (*model
 		TaskID:    taskID,
 		Status:    "PENDING",
 		CreatedAt: createdAt,
+		ReadyAt:   &createdAt,
 	}
 
 	data, err := json.Marshal(execution)
@@ -215,12 +216,15 @@ func (s *RedisStore) StoreExecution(exec *models.Execution) error {
 	return s.client.Set(context.Background(), "execution:"+exec.ID, data, executionTTL).Err()
 }
 
-// PromoteExecution transitions a BLOCKED execution to PENDING.
-// Idempotent: if the execution is already PENDING or beyond, it is left unchanged.
+// PromoteExecution transitions a BLOCKED execution to PENDING and stamps
+// ReadyAt. Idempotent: if the execution is already PENDING or beyond, it is
+// left unchanged.
 func (s *RedisStore) PromoteExecution(executionID string) error {
 	_, err := s.updateExecution(executionID, func(e *models.Execution) error {
 		if e.Status == "BLOCKED" {
 			e.Status = "PENDING"
+			now := time.Now().UTC()
+			e.ReadyAt = &now
 		}
 		return nil
 	})
@@ -268,12 +272,17 @@ func (s *RedisStore) GetAllExecutions() ([]*models.Execution, error) {
 }
 
 // AssignExecution atomically records the chosen server and the new status
-// (typically QUEUED) on the execution. Uses optimistic-concurrency retry so
-// it is safe against concurrent updates from worker or results goroutines.
+// (typically QUEUED) on the execution, stamping DispatchedAt when the state
+// is QUEUED. Uses optimistic-concurrency retry so it is safe against
+// concurrent updates from worker or results goroutines.
 func (s *RedisStore) AssignExecution(executionID, serverID, state string) error {
 	_, err := s.updateExecution(executionID, func(execution *models.Execution) error {
 		execution.AssignedServer = serverID
 		execution.Status = state
+		if state == "QUEUED" {
+			now := time.Now().UTC()
+			execution.DispatchedAt = &now
+		}
 		return nil
 	})
 	return err
@@ -289,6 +298,7 @@ func (s *RedisStore) RevertExecutionAssignment(executionID string) error {
 		execution.Status = "PENDING"
 		execution.StartedAt = nil
 		execution.CompletedAt = nil
+		execution.DispatchedAt = nil
 		return nil
 	})
 	return err

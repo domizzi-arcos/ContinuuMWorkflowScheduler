@@ -19,4 +19,12 @@ type TaskResult struct {
 	CostUSD             float64   `json:"cost_usd"`
 	EnergyWh            float64   `json:"energy_wh"`
 	DataflowPath        []string  `json:"dataflow_path"`
+	// ReadyTime and DispatchTime copy the execution's ReadyAt and
+	// DispatchedAt; queueing delay = StartTime - ReadyTime.
+	ReadyTime    *time.Time `json:"ready_time,omitempty"`
+	DispatchTime *time.Time `json:"dispatch_time,omitempty"`
+	// Static parameters of the chosen server at execution time.
+	ServerPowerWatts  int     `json:"server_power_watts"`
+	ServerCostPerHour float64 `json:"server_cost_per_hour"`
+	ServerLatencyMS   int     `json:"server_latency_ms"`
 }

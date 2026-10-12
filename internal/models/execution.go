@@ -18,4 +18,10 @@ type Execution struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	// ReadyAt is when the execution became PENDING: at creation for entry
+	// slots, on promotion from BLOCKED otherwise.
+	ReadyAt *time.Time `json:"ready_at,omitempty"`
+	// DispatchedAt is when the scheduler assigned a server and queued the
+	// execution; cleared if the assignment is reverted.
+	DispatchedAt *time.Time `json:"dispatched_at,omitempty"`
 }

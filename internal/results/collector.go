@@ -98,6 +98,11 @@ func (c *Collector) persist(done <-chan struct{}, body []byte) {
 		CostUSD:             msg.CostUSD,
 		EnergyWh:            msg.EnergyWh,
 		DataflowPath:        msg.DataflowPath,
+		ReadyTime:           msg.ReadyTime,
+		DispatchTime:        msg.DispatchTime,
+		ServerPowerWatts:    msg.ServerPowerWatts,
+		ServerCostPerHour:   msg.ServerCostPerHour,
+		ServerLatencyMS:     msg.ServerLatencyMS,
 	}
 
 	select {

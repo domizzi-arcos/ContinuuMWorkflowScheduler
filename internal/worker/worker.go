@@ -280,6 +280,11 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 		EffectiveDurationMS: endTime.Sub(startTime).Milliseconds(),
 		CostUSD:             costUSD,
 		EnergyWh:            energyWh,
+		ReadyTime:           execution.ReadyAt,
+		DispatchTime:        execution.DispatchedAt,
+		ServerPowerWatts:    srv.PowerWatts,
+		ServerCostPerHour:   srv.CostPerHour,
+		ServerLatencyMS:     srv.Latency,
 		DataflowPath: []string{
 			"generator", "redis", "scheduler", "task_exchange",
 			fmt.Sprintf("%s_queue", tierLower), srv.ID,

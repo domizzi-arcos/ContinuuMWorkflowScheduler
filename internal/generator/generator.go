@@ -123,8 +123,10 @@ func (g *Generator) instantiateWorkflow(done <-chan struct{}) error {
 		}
 
 		status := "BLOCKED"
+		var readyAt *time.Time
 		if len(deps) == 0 {
 			status = "PENDING"
+			readyAt = &now
 		}
 
 		exec := &models.Execution{
@@ -136,6 +138,7 @@ func (g *Generator) instantiateWorkflow(done <-chan struct{}) error {
 			Priority:   priority,
 			DependsOn:  deps,
 			CreatedAt:  now,
+			ReadyAt:    readyAt,
 		}
 		if err := g.store.StoreExecution(exec); err != nil {
 			return fmt.Errorf("store execution %s: %w", exec.ID, err)
