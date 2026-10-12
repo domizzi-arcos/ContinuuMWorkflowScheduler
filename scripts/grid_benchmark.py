@@ -85,6 +85,9 @@ ALGORITHMS = algorithms.NAMES
 DRAIN_S = 180
 RUN_OVERHEAD_S = 3
 
+# Gap between workflow submissions (generator.workflowSubmissionInterval).
+WORKFLOW_INTERVAL_MS = 2000
+
 # Eight topologies cover three regimes:
 #   - uniform_{s,m,l}: equal server counts per tier at increasing scale
 #     (stress test for algorithms that don't differentiate by tier).
@@ -269,7 +272,8 @@ def load_base_config(path: str) -> dict:
 def make_config(base: dict, topo: dict, cap: dict, duration: int,
                 topsis_weights: dict | None = None,
                 algorithm: str | None = None,
-                seed: int | None = None) -> dict:
+                seed: int | None = None,
+                cap_name: str | None = None) -> dict:
     """Produce a per-combo config by mutating a deep copy of the base.
 
     The base config is treated as immutable; this function is the single
@@ -291,6 +295,7 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
             simulation (server seeder, scheduler tie-breaker, task generator,
             workflow shape) is set to the same value so that a single ``--seeds``
             flag controls full-stack reproducibility.
+        cap_name: Capacity profile name, recorded in ``experiment.labels``.
 
     Returns:
         A fresh dict ready to be YAML-dumped as a per-combo config file.
@@ -339,6 +344,20 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
         cfg["scheduler"]["seed"]          = int(seed)
         cfg["generator"]["seed"]          = int(seed)
         cfg["generator"]["workflow_seed"] = int(seed)
+
+    # Run descriptors copied by the exporter into every result's meta.labels,
+    # so a JSON file identifies its combo without relying on its path.
+    labels = {
+        "topology":    topo["label"],
+        "interval_ms": str(WORKFLOW_INTERVAL_MS),
+    }
+    if cap_name is not None:
+        labels["capacity"] = cap_name
+    if seed is not None:
+        labels["seed"] = str(seed)
+    if topsis_weights:
+        labels["weights"] = topsis_weights["label"]
+    cfg["experiment"]["labels"] = labels
     return cfg
 
 
@@ -699,7 +718,8 @@ def main():
         for c in all_combos:
             cfg = make_config(base_cfg, c["topology"], CAPACITY_PROFILES[c["capacity_name"]],
                               args.duration, topsis_weights=c["topsis_weights"],
-                              algorithm=c["algorithm"], seed=c.get("seed"))
+                              algorithm=c["algorithm"], seed=c.get("seed"),
+                              cap_name=c["capacity_name"])
             write_temp_config(cfg, os.path.join(configs_dir, f"{c['combo_id']}.yaml"))
         print(f"Wrote {len(all_combos)} configs to {configs_dir}")
         return
@@ -765,7 +785,7 @@ def main():
         cfg_path = os.path.join(configs_dir, f"{combo_id}.yaml")
         cfg      = make_config(base_cfg, topo, cap, args.duration,
                                topsis_weights=weights, algorithm=algorithm,
-                               seed=combo.get("seed"))
+                               seed=combo.get("seed"), cap_name=cap_name)
         write_temp_config(cfg, cfg_path)
 
         # The Go binary will write its JSON output here.

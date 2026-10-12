@@ -102,7 +102,10 @@ func run(args []string) error {
 		slog.Info("starting algorithm run", "algorithm", algo, "run", fmt.Sprintf("%d/%d", i+1, len(policies)))
 		err := runner.Run(redisStore, &cfg, runDuration, drainDeadline, func(c *config.Config, out runner.Outcome) error {
 			slog.Info("drain finished", "algorithm", algo, "drained", out.Drained, "drain_s", fmt.Sprintf("%.1f", out.DrainSeconds))
-			_, err := results.ExportRun(redisStore, c, out.Wall, *outDir, results.RunInfo{Provenance: prov})
+			drained, drainS := out.Drained, out.DrainSeconds
+			_, err := results.ExportRun(redisStore, c, out.Wall, *outDir, results.RunInfo{
+				Provenance: prov, Drained: &drained, DrainSeconds: &drainS,
+			})
 			return err
 		})
 		if err != nil {

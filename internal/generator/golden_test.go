@@ -146,3 +146,33 @@ func TestReplayRejectsSeedZero(t *testing.T) {
 		t.Fatal("want error for seed 0")
 	}
 }
+
+// TestLiveSeqMatchesCreationOrder checks WorkflowInstance.Seq is the
+// creation index, i.e. the ReplayWorkflows index used by the audit join.
+func TestLiveSeqMatchesCreationOrder(t *testing.T) {
+	mr := miniredis.RunT(t)
+	s, err := store.NewRedisStore(mr.Addr(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := New(s, syntheticTasks(10), make(chan string, 1000), nil, 3, 1, 10)
+	for i := 0; i < 9; i++ {
+		if err := g.instantiateWorkflow(make(chan struct{})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wfs, _ := s.GetAllWorkflowInstances()
+	sort.Slice(wfs, func(i, j int) bool { return wfs[i].SlotExecIDs["A"] < wfs[j].SlotExecIDs["A"] })
+	for i, wi := range wfs {
+		if wi.Seq != i {
+			t.Fatalf("workflow %d has seq %d", i, wi.Seq)
+		}
+		ex, _ := s.GetExecution(wi.SlotExecIDs["A"])
+		if ex.ReadyAt == nil || !ex.ReadyAt.Equal(wi.CreatedAt) {
+			t.Fatalf("entry slot ready_at %v, workflow created %v", ex.ReadyAt, wi.CreatedAt)
+		}
+		if ex2, _ := s.GetExecution(wi.SlotExecIDs["B"]); ex2.ReadyAt != nil {
+			t.Fatalf("blocked slot has ready_at %v", ex2.ReadyAt)
+		}
+	}
+}

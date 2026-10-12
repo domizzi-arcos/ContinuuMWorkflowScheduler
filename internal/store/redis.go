@@ -511,14 +511,31 @@ func (s *RedisStore) MarkWorkflowDone(id string) error {
 		return err
 	}
 	wi.Status = "DONE"
-	wi.MakespanMS = s.computeWorkflowMakespan(wi)
+	earliest, latest := s.workflowSpan(wi)
+	wi.MakespanMS = makespanMS(earliest, latest)
+	if latest != nil {
+		wi.CompletedAt = latest
+		wi.ResponseMS = latest.Sub(wi.CreatedAt).Milliseconds()
+	}
 	return s.StoreWorkflowInstance(wi)
 }
 
 // computeWorkflowMakespan scans all slot executions and returns
 // max(CompletedAt) - min(StartedAt) in milliseconds.
 func (s *RedisStore) computeWorkflowMakespan(wi *models.WorkflowInstance) int64 {
-	var earliest, latest *time.Time
+	return makespanMS(s.workflowSpan(wi))
+}
+
+func makespanMS(earliest, latest *time.Time) int64 {
+	if earliest == nil || latest == nil {
+		return 0
+	}
+	return latest.Sub(*earliest).Milliseconds()
+}
+
+// workflowSpan returns min(StartedAt) and max(CompletedAt) over the slot
+// executions that have both; nil when none has.
+func (s *RedisStore) workflowSpan(wi *models.WorkflowInstance) (earliest, latest *time.Time) {
 	for _, execID := range wi.SlotExecIDs {
 		exec, err := s.GetExecution(execID)
 		if err != nil || exec.StartedAt == nil || exec.CompletedAt == nil {
@@ -533,10 +550,7 @@ func (s *RedisStore) computeWorkflowMakespan(wi *models.WorkflowInstance) int64 
 			latest = &t
 		}
 	}
-	if earliest == nil || latest == nil {
-		return 0
-	}
-	return latest.Sub(*earliest).Milliseconds()
+	return earliest, latest
 }
 
 func (s *RedisStore) GetAllWorkflowInstances() ([]*models.WorkflowInstance, error) {

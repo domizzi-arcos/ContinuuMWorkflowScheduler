@@ -153,6 +153,7 @@ func (g *Generator) instantiateWorkflow(done <-chan struct{}) error {
 		Status:       "RUNNING",
 		SlotExecIDs:  slotExecIDs,
 		CreatedAt:    now,
+		Seq:          draw.Seq,
 	}
 	if err := g.store.StoreWorkflowInstance(wi); err != nil {
 		return fmt.Errorf("store workflow instance: %w", err)

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pcturnes/distributed-workflow-scheduler/internal/audit"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/config"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/provenance"
@@ -38,6 +39,8 @@ type ExperimentMeta struct {
 	// Provenance is set by the campaign runner (cmd/benchmark); it is absent
 	// from files written by the interactive app and the legacy runner.
 	Provenance *provenance.Info `json:"provenance,omitempty"`
+	// Labels copies config experiment.labels (topology, capacity, seed, ...).
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ExperimentSummary holds the aggregate metrics computed at end-of-run by
@@ -54,6 +57,24 @@ type ExperimentSummary struct {
 	ThroughputPerMin        float64                `json:"throughput_tasks_per_min"`
 	AvgEffectiveDurationMS  float64                `json:"avg_effective_duration_ms"`
 	ByTier                  map[string]TierSummary `json:"by_tier"`
+	// EndState describes the executions left unfinished at export time.
+	EndState *EndState `json:"end_state,omitempty"`
+}
+
+// EndState counts the executions still in each non-DONE state when the run
+// was exported. PendingUnschedulable counts PENDING executions whose task
+// fits no server even when idle (no single server has enough CPU, memory and
+// disk; see audit.Classify), so they could never have been placed. Drained
+// and DrainSeconds are set by the runner: whether the drain condition held
+// before the deadline, and how long the drain phase lasted.
+type EndState struct {
+	Pending              int      `json:"pending"`
+	Blocked              int      `json:"blocked"`
+	Queued               int      `json:"queued"`
+	Running              int      `json:"running"`
+	PendingUnschedulable int      `json:"pending_unschedulable"`
+	Drained              *bool    `json:"drained,omitempty"`
+	DrainSeconds         *float64 `json:"drain_seconds,omitempty"`
 }
 
 // TierSummary aggregates per-tier (EDGE, FOG, CLOUD) totals. AvgDurationMS
@@ -74,6 +95,11 @@ type WorkflowSummary struct {
 	Status       string    `json:"status"`
 	MakespanMS   int64     `json:"makespan_ms"`
 	CreatedAt    time.Time `json:"created_at"`
+	// Seq is the creation order within the run; CompletedAt and ResponseMS
+	// (last completion - creation) are set for DONE workflows only.
+	Seq         int        `json:"seq"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ResponseMS  int64      `json:"response_ms,omitempty"`
 }
 
 // ServerSnapshot captures end-of-run counters per server so the analysis
@@ -84,12 +110,23 @@ type ServerSnapshot struct {
 	ServerType     string `json:"server_type"`
 	CompletedTasks int    `json:"completed_tasks"`
 	ActiveTasks    int    `json:"active_tasks"`
+	// Static server parameters, as seeded.
+	MaxCPU      int     `json:"max_cpu"`
+	MaxMemory   int     `json:"max_memory"`
+	MaxDisk     int     `json:"max_disk"`
+	Latency     int     `json:"latency"`
+	CostPerHour float64 `json:"cost_per_hour"`
+	PowerWatts  int     `json:"power_watts"`
 }
 
 // RunInfo carries run-level metadata from the runner into the exported file.
 // The zero value reproduces the output of Export.
 type RunInfo struct {
 	Provenance *provenance.Info
+	// Drained and DrainSeconds are copied into summary.end_state; nil when
+	// the caller did not track the drain phase.
+	Drained      *bool
+	DrainSeconds *float64
 }
 
 // Export reads all task results, workflow instances, and server state from
@@ -130,8 +167,22 @@ func ExportRun(s *store.RedisStore, cfg *config.Config, wallDuration time.Durati
 			ServerType:     srv.Type,
 			CompletedTasks: srv.CompletedTasks,
 			ActiveTasks:    srv.ActiveTasks,
+			MaxCPU:         srv.MaxCPU,
+			MaxMemory:      srv.MaxMemory,
+			MaxDisk:        srv.MaxDisk,
+			Latency:        srv.Latency,
+			CostPerHour:    srv.CostPerHour,
+			PowerWatts:     srv.PowerWatts,
 		})
 	}
+
+	endState, err := buildEndState(s, servers)
+	if err != nil {
+		slog.Error("failed to build end state", "component", "exporter", "err", err)
+		return "", fmt.Errorf("failed to build end state: %w", err)
+	}
+	endState.Drained = info.Drained
+	endState.DrainSeconds = info.DrainSeconds
 
 	meta := ExperimentMeta{
 		Algorithm:     cfg.Scheduler.Algorithm,
@@ -141,9 +192,11 @@ func ExportRun(s *store.RedisStore, cfg *config.Config, wallDuration time.Durati
 		NumServers:    numServers,
 		TOPSISWeights: cfg.Scheduler.TOPSISWeights,
 		Provenance:    info.Provenance,
+		Labels:        cfg.Experiment.Labels,
 	}
 
 	summary := buildSummary(tasks, workflows, wallDuration)
+	summary.EndState = endState
 
 	wfSummaries := make([]*WorkflowSummary, 0, len(workflows))
 	for _, wi := range workflows {
@@ -154,6 +207,9 @@ func ExportRun(s *store.RedisStore, cfg *config.Config, wallDuration time.Durati
 			Status:       wi.Status,
 			MakespanMS:   wi.MakespanMS,
 			CreatedAt:    wi.CreatedAt,
+			Seq:          wi.Seq,
+			CompletedAt:  wi.CompletedAt,
+			ResponseMS:   wi.ResponseMS,
 		})
 	}
 
@@ -189,6 +245,40 @@ func ExportRun(s *store.RedisStore, cfg *config.Config, wallDuration time.Durati
 	}
 	slog.Info("results exported", "component", "exporter", "tasks", len(tasks), "workflows", len(wfSummaries), "file", filename)
 	return filename, nil
+}
+
+// buildEndState counts unfinished executions by state and flags PENDING
+// ones whose task fits no server.
+func buildEndState(s *store.RedisStore, servers []*models.Server) (*EndState, error) {
+	executions, err := s.GetAllExecutions()
+	if err != nil {
+		return nil, err
+	}
+	taskList, err := s.GetAllTasks()
+	if err != nil {
+		return nil, err
+	}
+	tasks := make(map[string]*models.Task, len(taskList))
+	for _, t := range taskList {
+		tasks[t.ID] = t
+	}
+	es := &EndState{}
+	for _, ex := range executions {
+		switch ex.Status {
+		case "PENDING":
+			es.Pending++
+			if t, ok := tasks[ex.TaskID]; ok && !audit.Classify(t, servers).Schedulable {
+				es.PendingUnschedulable++
+			}
+		case "BLOCKED":
+			es.Blocked++
+		case "QUEUED":
+			es.Queued++
+		case "RUNNING":
+			es.Running++
+		}
+	}
+	return es, nil
 }
 
 // buildSummary aggregates per-tier and overall metrics from the task list,

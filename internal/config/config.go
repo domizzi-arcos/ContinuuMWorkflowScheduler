@@ -157,6 +157,9 @@ type ExperimentConfig struct {
 	DurationSeconds    int  `yaml:"duration_seconds"`
 	ProgressLogSeconds int  `yaml:"progress_log_seconds"`
 	ExitOnComplete     bool `yaml:"exit_on_complete"` // exit process when experiment drains (for batch runs)
+	// Labels are free-form run descriptors (topology, capacity, seed, ...)
+	// copied verbatim into each exported result's meta.labels.
+	Labels map[string]string `yaml:"labels"`
 }
 
 // Config is the root object decoded from the YAML file.

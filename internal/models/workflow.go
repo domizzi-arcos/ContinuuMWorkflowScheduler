@@ -26,4 +26,12 @@ type WorkflowInstance struct {
 	SlotExecIDs  map[string]string `json:"slot_exec_ids"` // slot ID → execution ID
 	CreatedAt    time.Time         `json:"created_at"`
 	MakespanMS   int64             `json:"makespan_ms,omitempty"` // wall time first→last task
+	// Seq is the creation order within the run (0-based), equal to the
+	// index of the draw in generator.ReplayWorkflows.
+	Seq int `json:"seq"`
+	// CompletedAt is the last slot's completion time; ResponseMS is
+	// CompletedAt - CreatedAt (includes waiting before the first start,
+	// unlike MakespanMS). Both are set when the workflow is marked DONE.
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ResponseMS  int64      `json:"response_ms,omitempty"`
 }
