@@ -210,3 +210,63 @@ capacity alone explains 4.28 per run (≈ 51%); time alone 4.03 (≈ 48%).
   bimodal (90% of sampled templates < 5.5 s, ~8% at 3.5–16 min), so a cap
   touches ~8% of templates and makes every workflow completable, letting
   runs drain early.
+
+## WP2 — Stronger baselines
+
+### Changes
+
+- Golden test first (`internal/scheduler/testdata/policies.golden`): selections of the five v1
+  policies (campaign weights, random seed 42) on 500 seeded (task,
+  candidate set) cases with deliberate ties. Still passes after every WP2
+  change, so the v1 policies are unchanged.
+- `criteria.go`: `computeCriteria` (time, cost, energy, util) extracted
+  from TOPSIS with identical arithmetic; `sortedByID`, `lexLess`.
+- New policies, one file each: `min_cost`, `min_energy`, `eft`,
+  `weighted_sum`, `topsis_u0`, `best_fit_norm` (optional). Each copies and
+  ID-sorts the candidates and never mutates the caller's slice.
+- **Deviation — tie tolerance.** Ties are scores equal within a relative
+  1e-9 (`tieTolerance`). Without it, mathematically equal scores (e.g.
+  best_fit_norm's mean free fractions) were split by floating-point
+  rounding instead of the documented tie-break. TOPSIS is untouched.
+- `eft` doc comment: online EFT greedy (HEFT's server-selection step), not
+  HEFT. With immediate starts and equal d, it is the lowest-latency server.
+- Registry: `internal/algos` now has `Names()` (10 core, v2 default),
+  `Legacy()` (v1 five; `benchmark/main.go` uses it, so its behaviour is
+  unchanged) and `Optional()` (`best_fit_norm`). `config.Validate` and
+  `scheduler.NewAlgorithm` use it. `cmd/benchmark` defaults to the 10.
+- `scripts/algorithms.py`: names, labels, abbreviations, colours, markers,
+  line styles. Used by `grid_benchmark.py`, `grid_plot.py`,
+  `plot_results.py`, `generate_report.py`, `benchmark/analysis/plot.py`
+  (its image now builds from the repo root). Go test
+  `internal/algos/sync_test.go` fails on any divergence (mutation-checked).
+- Palette: the 8 validated hues of the dataviz reference palette, assigned
+  in policy order (round_robin red, best_fit violet, worst_fit green, topsis
+  blue, min_cost orange, min_energy aqua, eft yellow, weighted_sum magenta);
+  validator on that order: adjacent CVD ΔE ≥ 9.1, normal-vision ΔE ≥ 19.6,
+  contrast WARN for aqua/yellow/magenta (labels/markers required). random is
+  neutral grey; topsis_u0 / best_fit_norm share their parent's hue with
+  dashed lines and hollow markers; every policy has a unique marker.
+  All-pairs separation fails beyond 3 hues, so scatter plots must use
+  markers (WP7).
+- `heatmap` cell labels now use unique abbreviations (two-letter prefixes
+  collided: TOPSIS / TOPSIS no-util, Min-Cost / Min-Energy).
+
+### Tests
+
+- Per policy: name, registration, nil on empty, single candidate unchanged,
+  agreement with an independent oracle on 500 cases × 3 input orders
+  (original, reversed, shuffled), input slice unmodified, explicit
+  tie-break cases.
+- `weighted_sum` ≠ `topsis` on a constructed 3-server case (b vs c) and on
+  95 / 500 golden cases: the aggregation changes decisions.
+- `topsis_u0` == `NewTOPSIS(0.4, 0.3, 0.3, 0)` on all 500 cases, and differs
+  from `topsis` on some (the ablation is not vacuous).
+- End-to-end smoke run of the five new policies in the emulator (4 s
+  window): all exit cleanly and export.
+
+### Micro-benchmark
+
+`results/bench_20261012_104141.txt` (5 repeats, all 11 policies, n ∈ {6, 15,
+24, 100}). At n = 24 every policy decides in < 5 µs (random 13 ns, TOPSIS
+2.9–4.0 µs); the scheduler polls every 500 ms. Repeats vary by up to ~40%
+on this laptop; WP7 should report medians.
