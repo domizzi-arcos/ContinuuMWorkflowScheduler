@@ -82,3 +82,40 @@ the sampled templates. This is one more reason v2 cannot be mixed with v1.
 - Both `git status --porcelain` (manifest) and Go's `vcs.modified`
   (per-run meta) count untracked files, so the untracked `Claude.md` marks
   every run dirty unless it is excluded locally (`.git/info/exclude`).
+
+### Acceptance
+
+- `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l .`: clean.
+- `grid_benchmark.py --dry-run --seeds 1 --skip-topsis-weights`: 24 combos
+  (96 without `--skip-topsis-weights`: +72 TOPSIS weight-sensitivity calls).
+  Estimate for the v1 campaign (seeds 1–3, 5 policies): ≤ 21.3 h.
+- Pilot: `results/pilot_wp0_20261012_101920/` (uniform_m × medium × seed 1,
+  round_robin + topsis, `cmd/benchmark` built at 476b0d0, dirty only because
+  of the untracked `Claude.md`). Exit 0, two JSON files, legacy key set plus
+  `meta.provenance`. 7 min 6 s total.
+
+| Policy | Tasks | Workflows done | Cost ($) | Energy (Wh) | Avg makespan (ms) | Edge/Fog/Cloud tasks | Drained |
+|---|---|---|---|---|---|---|---|
+| round_robin | 55 | 6/15 | 0.0090 | 2.05 | 3,568 | 14/15/26 | no (180.2 s) |
+| topsis | 55 | 6/15 | 0.0081 | 1.82 | 3,556 | 0/49/6 | no (180.9 s) |
+
+### Finding: two causes of non-draining, not one
+
+Redis end state after the topsis pilot run: 55 DONE, 10 BLOCKED, 6 PENDING,
+4 RUNNING.
+
+1. **Unschedulable tasks, even in the medium profile.** All 6 PENDING are
+   cloud-tier tasks needing 1,200–1,600 GB disk and/or 65,536 MB memory.
+   With seed 1 the largest cloud node has 49,152 MB and 500 GB disk. The
+   binding resources here are disk and memory, not CPU. §4 of the plan only
+   anticipated the small profile's CPU shortfall.
+2. **Tasks longer than window + drain.** All 4 RUNNING are edge tasks with
+   durations of 396–404 s, near the per-tier 99th-percentile cap applied by
+   `enrich_dataset.py`. Started ~20 s before the drain began, they cannot
+   finish inside the 180 s deadline whatever the policy does.
+
+Implication for WP1: the audit must also flag templates whose duration
+exceeds what fits in the run (≥ drain deadline), and report both causes
+separately. For WP4, `demand_scale` / `drop_unschedulable` fix cause 1 only;
+cause 2 needs a separate decision at GATE G1 (e.g. a duration cap or a
+longer drain).
