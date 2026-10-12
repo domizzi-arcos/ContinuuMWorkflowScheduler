@@ -270,3 +270,30 @@ capacity alone explains 4.28 per run (≈ 51%); time alone 4.03 (≈ 48%).
 24, 100}). At n = 24 every policy decides in < 5 µs (random 13 ns, TOPSIS
 2.9–4.0 µs); the scheduler polls every 500 ms. Repeats vary by up to ~40%
 on this laptop; WP7 should report medians.
+
+## WP3 — Instrumentation
+
+All JSON changes are additive; `internal/results/schema_test.go` (committed
+before any field was added) pins every v1 key of every object.
+
+- Execution: `ready_at` (entry slots at creation; others when promoted
+  BLOCKED→PENDING; `CreateExecution` too), `dispatched_at` (set by
+  `AssignExecution` for QUEUED, cleared by `RevertExecutionAssignment`).
+- Task results: `ready_time`, `dispatch_time`, `server_power_watts`,
+  `server_cost_per_hour`, `server_latency_ms` (worker → message →
+  collector).
+- Workflows: `seq` (= draw index of `ReplayWorkflows`, so the audit and WP7
+  can match workflows across policies exactly), `completed_at`,
+  `response_ms` (last completion − creation). `makespan_ms` unchanged
+  (test pins first start → last completion).
+- Server snapshots: `max_cpu`, `max_memory`, `max_disk`, `latency`,
+  `cost_per_hour`, `power_watts`.
+- `summary.end_state`: `pending`, `blocked`, `queued`, `running`,
+  `pending_unschedulable` (task fits no server, `audit.Classify`), and from
+  the campaign runner `drained`, `drain_seconds` (`RunInfo`). Files from
+  `Export` (legacy runner, interactive app) get the counts but no drain
+  fields.
+- `experiment.labels` → `meta.labels`; the grid script sets `topology`,
+  `capacity`, `seed`, `interval_ms` (and `weights` for sensitivity combos).
+- End-to-end check (topsis, 6 s window, 20 s drain): every new field is
+  populated; ready → dispatch ≈ 0.5 s (scheduler poll).
