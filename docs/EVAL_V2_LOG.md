@@ -548,3 +548,16 @@ Open for the user (not changed):
   (reference withheld for review)".
 - The README calls the system a "discrete-event simulator"; §6 asks
   for "emulator" wording in anything reaching reviewers.
+
+## Cluster support (Apptainer, no Docker)
+
+`scripts/cluster/`: `services.sh` (Redis + RabbitMQ from `.sif` images as
+background processes on 4 private ports, each in its own PID namespace),
+`run_combo.sh` (one combo end to end with a per-job base config),
+`c3_array.sbatch` (Slurm array 0–119, index → combo from the grid script's
+own lists), `python.def`, `compare_runs.py` (WP6 noise check: tasks ±1,
+cost ±5%), `README.md`. Tested locally with Apptainer 1.5.2 on spare ports
+while C3 ran on Docker: services start/stop cleanly, static runner + Python
+SIF run a combo end to end, index mapping checked (0, 1, 4, 13, 119),
+`compare_runs.py` passes C1 vs itself and fails a deliberately short run.
+Not tested on a real Slurm cluster.
