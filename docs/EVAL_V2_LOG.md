@@ -428,3 +428,47 @@ choice, queueing delay, feasibility join), four PDFs, `numbers.tex` +
 JSON exists locally (G0). The table in the plan remains unchecked; if the
 v1 grid directories are found, run `make analysis GRID_DIRS=<v1 grid>` and
 compare.
+
+### Behaviour check before C3 (`results/grid_20261012_114019_check/`)
+
+Requested by the user to test the C1 finding (TOPSIS beaten on cost and
+energy) on more cells before the full campaign.
+
+```
+python3 scripts/grid_benchmark.py --seeds 2 --skip-topsis-weights \
+  --topologies edge_heavy,cloud_heavy \
+  --algorithms topsis,topsis_u0,weighted_sum,min_cost,min_energy \
+  --demand-scale --drop-unschedulable --max-duration-ms 30000 --tag check
+```
+
+30 runs, exit 0, 44 min; every run drained (≈ 52 s) and completed 15/15
+workflows. Analysed together with C1 (7 configurations, `analysis_out/check`):
+
+| Cost ratio to TOPSIS | topsis_u0 | weighted_sum | min_cost | min_energy |
+|---|---|---|---|---|
+| cloud_heavy / large | 0.44 | 0.55 | 0.44 | 0.44 |
+| cloud_heavy / medium | 0.40 | 0.50 | 0.40 | 0.40 |
+| cloud_heavy / small | 0.92 | 0.92 | 0.91 | 0.92 |
+| edge_heavy / large | 0.93 | 0.93 | 0.93 | 0.93 |
+| edge_heavy / medium | 1.00 | 1.00 | 1.00 | 1.00 |
+| edge_heavy / small | 0.80 | 0.80 | 0.97 | 0.80 |
+| uniform_m / medium (C1) | 0.73 | 0.99 | 0.73 | 0.73 |
+
+- Geometric-mean ratio to TOPSIS over the 7 configurations (95% bootstrap
+  CI): cost — topsis_u0 0.70 [0.53, 0.89], min_energy 0.70 [0.53, 0.89],
+  min_cost 0.72 [0.54, 0.93], weighted_sum 0.79 [0.63, 0.94]; energy —
+  min_energy 0.75 [0.65, 0.86], topsis_u0 0.76 [0.65, 0.87], min_cost 0.85
+  [0.72, 1.00], weighted_sum 0.89 [0.81, 0.96]; makespan — all 0.996–1.000.
+- TOPSIS was never cheaper than any of the four in any configuration
+  (0 of 7). Wilcoxon p = 0.016 (the smallest possible with n = 7); not
+  significant after Holm (0.141) at this n. Descriptive only.
+- Placement: TOPSIS puts 0–3% of tasks on edge and 79–93% on fog in
+  cloud_heavy and uniform_m, where the others put 47–84% on edge.
+  topsis_u0 places like min_cost/min_energy, so the shift comes from the
+  utilisation criterion. weighted_sum (same criteria and weights, with
+  utilisation) also shifts to fog in cloud_heavy, so the criteria rather
+  than the aggregation drive it there. Likely mechanism (not verified in
+  code): edge nodes have 1–2 cores, so their post-placement utilisation is
+  high, and vector normalisation over a column dominated by cloud prices
+  compresses the edge–fog cost difference. The gap is largest when cloud
+  nodes dominate the candidate set.
