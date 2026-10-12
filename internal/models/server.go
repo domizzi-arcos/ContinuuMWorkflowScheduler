@@ -44,6 +44,12 @@ func (s *Server) HasCapacity(cpu, memory, disk int) bool {
 // scheduling algorithms can use to bias placement. Memory is scaled by 1/100
 // so it does not dominate the sum; higher means more free, lower means more
 // packed.
+// FitsWhenIdle reports whether the server could hold a task with these
+// demands if it were idle, i.e. ignoring current usage.
+func (s *Server) FitsWhenIdle(cpu, memory, disk int) bool {
+	return cpu <= s.MaxCPU && memory <= s.MaxMemory && disk <= s.MaxDisk
+}
+
 func (s *Server) FreeCapacity() int {
 	return (s.MaxCPU - s.UsedCPU) + (s.MaxMemory-s.UsedMemory)/100 + (s.MaxDisk - s.UsedDisk)
 }

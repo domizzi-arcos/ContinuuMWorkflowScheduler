@@ -134,6 +134,29 @@ type GeneratorConfig struct {
 	WorkflowSeed      int64  `yaml:"workflow_seed"`
 	PriorityMin       int    `yaml:"priority_min"`
 	PriorityMax       int    `yaml:"priority_max"`
+
+	// Workload options (eval-v2). All default to off, which reproduces the
+	// v1 workload exactly. They transform the sampled templates after
+	// sampling, so the dataset RNG stream is unchanged; see
+	// generator.PrepareTasks.
+
+	// DemandScale multiplies each template's CPU, memory and disk by the
+	// factors of its trace tier (keys edge, fog, cloud), rounding up, with
+	// at least 1 core. Tiers without an entry are left unchanged.
+	DemandScale map[string]DemandScale `yaml:"demand_scale"`
+	// MaxDurationMS caps every template's duration (0 = no cap).
+	MaxDurationMS int `yaml:"max_duration_ms"`
+	// DropUnschedulable removes templates that fit no server even when it
+	// is idle. This changes the workflow draws (identically for every
+	// policy of a seed).
+	DropUnschedulable bool `yaml:"drop_unschedulable"`
+}
+
+// DemandScale holds per-resource multipliers for one trace tier.
+type DemandScale struct {
+	CPU    float64 `yaml:"cpu"`
+	Memory float64 `yaml:"memory"`
+	Disk   float64 `yaml:"disk"`
 }
 
 // RedisConfig points the store package at a Redis instance.
@@ -214,6 +237,17 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.Generator.PriorityMin > cfg.Generator.PriorityMax {
 		return fmt.Errorf("generator.priority_min (%d) > priority_max (%d)", cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
+	}
+	for tier, f := range cfg.Generator.DemandScale {
+		if tier != "edge" && tier != "fog" && tier != "cloud" {
+			return fmt.Errorf("generator.demand_scale: unknown tier %q (use edge, fog, cloud)", tier)
+		}
+		if f.CPU <= 0 || f.Memory <= 0 || f.Disk <= 0 {
+			return fmt.Errorf("generator.demand_scale.%s: cpu, memory and disk factors must all be > 0, got %+v", tier, f)
+		}
+	}
+	if cfg.Generator.MaxDurationMS < 0 {
+		return fmt.Errorf("generator.max_duration_ms must be >= 0, got %d", cfg.Generator.MaxDurationMS)
 	}
 	tw := cfg.Scheduler.TOPSISWeights
 	// Time/Cost/Energy form a probability simplex; allow a 1e-3 slack for

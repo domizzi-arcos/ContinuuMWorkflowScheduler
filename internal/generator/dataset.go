@@ -18,12 +18,24 @@ import (
 
 type Options = config.GeneratorConfig
 
-// SeedTasks loads task templates from the Globus dataset CSV, stores them in
-// Redis, and returns the slice so the Generator can build its task pool.
+// SeedTasks loads task templates from the Globus dataset CSV, applies the
+// workload options (PrepareTasks; servers must already be seeded when
+// drop_unschedulable is on), stores them in Redis, and returns the slice so
+// the Generator can build its task pool.
 func SeedTasks(s *store.RedisStore, cfg Options) ([]*models.Task, error) {
 	tasks, err := LoadTasksFromCSV(cfg.DatasetPath, cfg.TaskCount, cfg.Seed)
 	if err != nil {
 		return nil, fmt.Errorf("load tasks from dataset: %w", err)
+	}
+	var servers []*models.Server
+	if cfg.DropUnschedulable {
+		if servers, err = s.GetAllServers(); err != nil {
+			return nil, fmt.Errorf("load servers: %w", err)
+		}
+	}
+	tasks = PrepareTasks(tasks, cfg, servers)
+	if len(tasks) == 0 {
+		return nil, fmt.Errorf("no task templates left after applying workload options")
 	}
 	for _, task := range tasks {
 		if err := s.StoreTask(task); err != nil {

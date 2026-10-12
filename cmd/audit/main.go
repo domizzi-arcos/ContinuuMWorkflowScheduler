@@ -131,14 +131,16 @@ func loadCombo(path string, drain time.Duration, cache map[string][]*models.Task
 		return nil, fmt.Errorf("build servers: %w", err)
 	}
 	key := fmt.Sprintf("%s|%d|%d", cfg.Generator.DatasetPath, cfg.Generator.TaskCount, cfg.Generator.Seed)
-	tasks, ok := cache[key]
+	raw, ok := cache[key]
 	if !ok {
-		tasks, err = generator.LoadTasksFromCSV(cfg.Generator.DatasetPath, cfg.Generator.TaskCount, cfg.Generator.Seed)
+		raw, err = generator.LoadTasksFromCSV(cfg.Generator.DatasetPath, cfg.Generator.TaskCount, cfg.Generator.Seed)
 		if err != nil {
 			return nil, err
 		}
-		cache[key] = tasks
+		cache[key] = raw
 	}
+	// Same workload options as SeedTasks applies in a real run.
+	tasks := generator.PrepareTasks(raw, cfg.Generator, servers)
 	c := &combo{
 		id:      strings.TrimSuffix(filepath.Base(path), ".yaml"),
 		cfg:     cfg,

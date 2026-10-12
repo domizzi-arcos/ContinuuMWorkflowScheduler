@@ -269,11 +269,27 @@ def load_base_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def demand_scale_factors(cap: dict) -> dict:
+    """Per-tier factors that scale task demands to a capacity profile.
+
+    Each factor is the profile's range maximum divided by the medium
+    profile's, per tier and resource (the enriched dataset's demands are
+    calibrated to the medium profile). Written to ``generator.demand_scale``.
+    """
+    ref = CAPACITY_PROFILES["medium"]
+    return {
+        tier: {res: cap[tier][res]["max"] / ref[tier][res]["max"]
+               for res in ("cpu", "memory", "disk")}
+        for tier in ("edge", "fog", "cloud")
+    }
+
+
 def make_config(base: dict, topo: dict, cap: dict, duration: int,
                 topsis_weights: dict | None = None,
                 algorithm: str | None = None,
                 seed: int | None = None,
-                cap_name: str | None = None) -> dict:
+                cap_name: str | None = None,
+                workload: dict | None = None) -> dict:
     """Produce a per-combo config by mutating a deep copy of the base.
 
     The base config is treated as immutable; this function is the single
@@ -296,6 +312,9 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
             workflow shape) is set to the same value so that a single ``--seeds``
             flag controls full-stack reproducibility.
         cap_name: Capacity profile name, recorded in ``experiment.labels``.
+        workload: Optional workload options: ``demand_scale`` (bool),
+            ``max_duration_ms`` (int, 0 = off), ``drop_unschedulable``
+            (bool). All off reproduces the v1 workload.
 
     Returns:
         A fresh dict ready to be YAML-dumped as a per-combo config file.
@@ -357,6 +376,19 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
         labels["seed"] = str(seed)
     if topsis_weights:
         labels["weights"] = topsis_weights["label"]
+
+    # Workload options (eval-v2, WP4). Only written when on, so a config
+    # with every option off is identical to a v1 config.
+    wl = workload or {}
+    if wl.get("demand_scale"):
+        cfg["generator"]["demand_scale"] = demand_scale_factors(cap)
+        labels["demand_scale"] = "profile_max_over_medium_max"
+    if wl.get("max_duration_ms"):
+        cfg["generator"]["max_duration_ms"] = int(wl["max_duration_ms"])
+        labels["max_duration_ms"] = str(int(wl["max_duration_ms"]))
+    if wl.get("drop_unschedulable"):
+        cfg["generator"]["drop_unschedulable"] = True
+        labels["drop_unschedulable"] = "true"
     cfg["experiment"]["labels"] = labels
     return cfg
 
@@ -614,6 +646,12 @@ def parse_args():
                    help="top-level results directory (default: results/grid_TIMESTAMP)")
     p.add_argument("--dry-run",              action="store_true",
                    help="print all combinations without executing")
+    p.add_argument("--demand-scale",         action="store_true",
+                   help="scale task demands per tier by profile max / medium max (WP4)")
+    p.add_argument("--max-duration-ms",      type=int, default=0,
+                   help="cap task durations at this many ms (0 = off)")
+    p.add_argument("--drop-unschedulable",   action="store_true",
+                   help="drop sampled templates that fit no server")
     p.add_argument("--emit-configs-only",    action="store_true",
                    help="write _configs/<combo>.yaml for every combination and exit "
                         "without building or running anything (input for cmd/audit)")
@@ -644,6 +682,11 @@ def main():
         sys.exit(1)
 
     base_cfg = load_base_config(args.config)
+    workload = {
+        "demand_scale":       args.demand_scale,
+        "max_duration_ms":    args.max_duration_ms,
+        "drop_unschedulable": args.drop_unschedulable,
+    }
 
     # Resolve the grid output directory. Two modes:
     #  - --resume: directory must exist; we'll append to its progress file.
@@ -719,7 +762,7 @@ def main():
             cfg = make_config(base_cfg, c["topology"], CAPACITY_PROFILES[c["capacity_name"]],
                               args.duration, topsis_weights=c["topsis_weights"],
                               algorithm=c["algorithm"], seed=c.get("seed"),
-                              cap_name=c["capacity_name"])
+                              cap_name=c["capacity_name"], workload=workload)
             write_temp_config(cfg, os.path.join(configs_dir, f"{c['combo_id']}.yaml"))
         print(f"Wrote {len(all_combos)} configs to {configs_dir}")
         return
@@ -785,7 +828,8 @@ def main():
         cfg_path = os.path.join(configs_dir, f"{combo_id}.yaml")
         cfg      = make_config(base_cfg, topo, cap, args.duration,
                                topsis_weights=weights, algorithm=algorithm,
-                               seed=combo.get("seed"), cap_name=cap_name)
+                               seed=combo.get("seed"), cap_name=cap_name,
+                               workload=workload)
         write_temp_config(cfg, cfg_path)
 
         # The Go binary will write its JSON output here.

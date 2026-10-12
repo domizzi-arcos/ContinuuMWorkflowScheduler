@@ -57,3 +57,34 @@ func TestApplyDefaultsAddsGeneratorDefaults(t *testing.T) {
 		t.Fatalf("expected edge CPU defaults to be populated, got %+v", cfg.Servers.Edge.CPU)
 	}
 }
+
+func TestValidateWorkloadOptions(t *testing.T) {
+	base := func() *Config {
+		c := &Config{}
+		c.Redis.Address, c.RabbitMQ.URL, c.Web.Port = "r", "q", 8080
+		c.Scheduler.Algorithm = "topsis"
+		c.Scheduler.TOPSISWeights = TOPSISWeights{Time: 0.4, Cost: 0.3, Energy: 0.3}
+		c.Generator.TaskCount, c.Generator.PriorityMin, c.Generator.PriorityMax = 1, 1, 1
+		return c
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("base config invalid: %v", err)
+	}
+	c := base()
+	c.Generator.DemandScale = map[string]DemandScale{"cloud": {CPU: 0.25, Memory: 0.125, Disk: 0.25}}
+	c.Generator.MaxDurationMS = 30000
+	if err := c.Validate(); err != nil {
+		t.Errorf("valid options rejected: %v", err)
+	}
+	for name, mut := range map[string]func(*Config){
+		"unknown tier": func(c *Config) { c.Generator.DemandScale = map[string]DemandScale{"EDGE": {1, 1, 1}} },
+		"zero factor":  func(c *Config) { c.Generator.DemandScale = map[string]DemandScale{"fog": {1, 0, 1}} },
+		"negative cap": func(c *Config) { c.Generator.MaxDurationMS = -1 },
+	} {
+		c := base()
+		mut(c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}

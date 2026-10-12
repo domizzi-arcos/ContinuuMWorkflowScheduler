@@ -48,7 +48,7 @@ func Classify(task *models.Task, servers []*models.Server) TaskFeasibility {
 		maxCPU = max(maxCPU, s.MaxCPU)
 		maxMem = max(maxMem, s.MaxMemory)
 		maxDisk = max(maxDisk, s.MaxDisk)
-		if task.CPU <= s.MaxCPU && task.Memory <= s.MaxMemory && task.Disk <= s.MaxDisk {
+		if s.FitsWhenIdle(task.CPU, task.Memory, task.Disk) {
 			f.Schedulable = true
 			f.MinEffectiveMS = math.Min(f.MinEffectiveMS, float64(task.Duration+s.Latency))
 		}
