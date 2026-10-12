@@ -105,10 +105,12 @@ Redis end state after the topsis pilot run: 55 DONE, 10 BLOCKED, 6 PENDING,
 4 RUNNING.
 
 1. **Unschedulable tasks, even in the medium profile.** All 6 PENDING are
-   cloud-tier tasks needing 1,200–1,600 GB disk and/or 65,536 MB memory.
-   With seed 1 the largest cloud node has 49,152 MB and 500 GB disk. The
-   binding resources here are disk and memory, not CPU. §4 of the plan only
-   anticipated the small profile's CPU shortfall.
+   cloud-tier tasks. Per-resource maxima of the seed-1 cloud tier are 32
+   cores, 49,152 MB and 1,300 GB, on different nodes. Tasks needing
+   65,536 MB fit no node; tasks needing (24 cores, 49,152 MB, 1,200 GB) fit
+   each resource somewhere but no single node has all three ("joint"). (An
+   earlier version of this entry quoted the CPU-largest node's values as the
+   maxima; corrected during WP1.)
 2. **Tasks longer than window + drain.** All 4 RUNNING are edge tasks with
    durations of 396–404 s, near the per-tier 99th-percentile cap applied by
    `enrich_dataset.py`. Started ~20 s before the drain began, they cannot
@@ -119,3 +121,80 @@ exceeds what fits in the run (≥ drain deadline), and report both causes
 separately. For WP4, `demand_scale` / `drop_unschedulable` fix cause 1 only;
 cause 2 needs a separate decision at GATE G1 (e.g. a duration cap or a
 longer drain).
+
+### Finding: `IntRange` min 0 is treated as unset
+
+`config.IntRange.ApplyDefaults` (`internal/config/config.go:73`) replaces a
+configured `min: 0` with `max`. Every capacity profile gives edge disk
+`min: 0`, so every edge node gets the profile's maximum disk (10 / 20 / 40 GB
+for small / medium / large). This held in the v1 campaign too. Not changed
+(hard rule 3: no default behaviour changes); the seeder golden test goes
+through `config.Load` so it pins this behaviour.
+
+## WP1 — Feasibility audit
+
+### Changes
+
+- Golden tests recorded **before** refactoring (029b580):
+  `internal/seeder/testdata/servers.golden` (3 profiles × 4 topologies ×
+  seeds {1,2,3,42}, via `config.Load`) and
+  `internal/generator/testdata/draws.golden` (7 seed/priority/pool cases ×
+  20 workflows through the live `instantiateWorkflow`).
+- `seeder.BuildServers(cfg)`: pure; `SeedServers` stores its output. Test:
+  equal to what `SeedServers` stores for every golden config. Side effect: a
+  tier error now aborts before anything is stored (before, earlier tiers
+  were already in Redis; the run aborted either way).
+- `generator.drawWorkflow` + `ReplayWorkflows(tasks, seed, prioMin,
+  prioMax, n)`; `WorkflowDraw.Seq` = creation index. Test: replay equals
+  live draws for every golden case. Signature deviation: `drawWorkflow`
+  also takes the template list. `generator.SubmissionInterval()` exported
+  for the audit.
+- `grid_benchmark.py --emit-configs-only`.
+- `internal/audit` (pure, tested) + `cmd/audit`. Beyond the plan, it also
+  applies a **time bound**: a workflow is time-infeasible when, with every
+  server idle and each task on its fastest feasible server, submission time
+  (seq × 2 s) + critical path > window + drain. Both bounds are
+  policy-independent: a flagged workflow cannot complete under any policy.
+  Outputs: per-combo CSV, per-template CSV, optional per-run join (`-grid`).
+
+### Validation on the pilot
+
+`results/pilot_wp0_20261012_101920/audit_pilot_join.csv`: both runs have
+9/15 incomplete workflows; the audit predicts exactly those 9 (7 capacity,
+2 time). 0 predicted-infeasible workflows completed; replayed templates
+match the runs' creation order (0 mismatches).
+
+### Audit results (`results/audit_20261012_103506/`)
+
+24 combos × seeds 1–5 = 120 configs, 120 templates each, deadline 210 s.
+Means per combo, first 15 workflows (what a 30 s window creates;
+`audit.csv` has the plan's 16):
+
+| Capacity | Unschedulable templates | of which edge / fog / cloud trace tier | Joint-only | Too-long templates | WF infeasible: capacity | time | any |
+|---|---|---|---|---|---|---|---|
+| small | 16.1 | 0.0 / 0.5 / 15.6 | 0.1 | 9.1 | 9.1 | 1.8 | 10.9 / 15 |
+| medium | 6.4 | 0.0 / 0.0 / 6.4 | 0.7 | 9.2 | 5.2 | 3.3 | 8.5 / 15 |
+| large | 0.0 | 0 / 0 / 0 | 0.0 | 9.2 | 0.0 | 4.6 | 4.6 / 15 |
+
+By topology, means range from 8.2 to 8.8 infeasible of 16 workflows.
+Topologies with the same cloud-node count give identical audits (e.g.
+uniform_l and cloud_heavy, both 8 cloud nodes), because the cloud tier's
+maxima set feasibility.
+
+- Binding resources, summed over the 120 combos: CPU 714, memory 810,
+  disk 666 template-level exceedances (a template can exceed several);
+  30 joint-only cases.
+- Too-long templates are edge (1,056) and fog (42) trace-tier tasks with
+  durations of 210–963 s (the per-tier p99 clip in `enrich_dataset.py`).
+- Variation across seeds is large: infeasible workflows per run range from
+  2 (large, seed 4) to 13 (small, seed 5).
+
+### Share of v1 incompleteness explained
+
+No v1 run JSON exists locally, so no per-run join is possible. Indirect
+check against the paper's figures: for seeds 1–3, the audit's upper bound on
+completable workflows is **6.69 of 15 per run** (small 3.83, medium 6.58,
+large 9.67). The paper reports 6.5–6.6 completed per run. If the rebuilt
+dataset matches the original, capacity + time infeasibility account for
+≈ 98% of incomplete workflows (8.31 of ≈ 8.45). Without the time bound,
+capacity alone would explain ≈ 5.3 per run, about 63%.
