@@ -504,3 +504,20 @@ renormalisation):
   uniform_m/medium.
 - Energy follows cost; makespan varies by < 3% across all variants.
 - One seed per configuration: descriptive only.
+
+## GATE G3 — C3 launched (user approval, 2026-10-12)
+
+Launched as planned (10 policies, no extra TOPSIS weight variant) at
+2026-10-12 13:24 UTC from commit 109a18e with a clean tree (`Claude.md`
+excluded locally via `.git/info/exclude`):
+
+```
+setsid nohup systemd-inhibit --what=sleep:idle --who=wfsched-c3 \
+  python3 -u scripts/grid_benchmark.py --seeds 1,2,3,4,5 --skip-topsis-weights \
+  --demand-scale --drop-unschedulable --max-duration-ms 30000 --tag c3
+```
+
+Output `results/grid_20261012_132435_c3/`, log
+`results/c3_launch_20261012_132435.log`. 120 combos × 10 policies = 1,200
+runs; expected 21–27 h (upper bound 71 h). Resume after an interruption
+with the same flags plus `--resume results/grid_20261012_132435_c3`.
