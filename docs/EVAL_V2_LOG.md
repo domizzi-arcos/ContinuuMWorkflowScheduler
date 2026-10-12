@@ -345,3 +345,19 @@ Seeds 1–5 × 24 combos; mean infeasible workflows of the first 15:
 workflow is completable in all 120 audited configs; 6–7 of 120 templates
 dropped per profile, 55–58% of cloud trace-tier templates kept. Grid flags:
 `--demand-scale --drop-unschedulable --max-duration-ms 30000`.
+
+### G2 pilot (`results/pilot_g2_20261012_110402/`)
+
+uniform_m × small × seed 1, round_robin + topsis, `--demand-scale
+--drop-unschedulable --max-duration-ms 30000`, binary at 1c6b9e3. 4 of 120
+templates dropped. Exit 0; total 2 min 35 s.
+
+| Policy | Tasks | Workflows | Cost ($) | Energy (Wh) | Avg makespan (ms) | Avg response (ms) | Edge/Fog/Cloud | Drained |
+|---|---|---|---|---|---|---|---|---|
+| round_robin | 75 | 15/15 | 0.0246 | 13.27 | 16,180 | 16,669 | 20/23/32 | yes, 46.1 s |
+| topsis | 75 | 15/15 | 0.0075 | 6.29 | 16,141 | 16,631 | 28/42/5 | yes, 46.2 s |
+
+End state empty for both (0 pending/blocked/queued/running). Audit join:
+0 incomplete, 0 predicted infeasible, 0 template mismatches. Per-run wall
+time ≈ 30 + 46 + 3 ≈ 79 s here (v1: 213 s); other combos will differ, so
+WP6 estimates should use measured times from C1.
