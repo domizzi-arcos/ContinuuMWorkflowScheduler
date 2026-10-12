@@ -66,23 +66,7 @@ func (t *TOPSIS) Select(task *models.Task, candidates []*models.Server) *models.
 	copy(sorted, candidates)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 
-	n := len(sorted)
-
-	rawTime := make([]float64, n)
-	rawCost := make([]float64, n)
-	rawEnergy := make([]float64, n)
-	rawUtil := make([]float64, n)
-	for i, srv := range sorted {
-		// Effective wall time = task.Duration + server.Latency (ms). Cost and
-		// energy are charged against that same effective time so the criteria
-		// match the wall-time figures recorded in the result dataset.
-		effectiveMS := task.Duration + srv.Latency
-		effectiveSec := float64(effectiveMS) / 1000.0
-		rawTime[i] = float64(effectiveMS)
-		rawCost[i] = srv.CostPerHour * effectiveSec / 3600.0
-		rawEnergy[i] = float64(srv.PowerWatts) * effectiveSec / 3600.0
-		rawUtil[i] = postPlacementUtil(srv, task)
-	}
+	rawTime, rawCost, rawEnergy, rawUtil := computeCriteria(task, sorted)
 
 	wt := weightedNorm(rawTime, t.wTime)
 	wc := weightedNorm(rawCost, t.wCost)
