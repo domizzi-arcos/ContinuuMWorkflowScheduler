@@ -297,3 +297,44 @@ before any field was added) pins every v1 key of every object.
   `capacity`, `seed`, `interval_ms` (and `weights` for sensitivity combos).
 - End-to-end check (topsis, 6 s window, 20 s drain): every new field is
   populated; ready → dispatch ≈ 0.5 s (scheduler poll).
+
+## WP4 — Benchmark-validity options
+
+### Changes
+
+- `generator.demand_scale` (per trace tier: cpu, memory, disk factors;
+  ceil, ≥ 1 core), `generator.max_duration_ms` (new, from G1),
+  `generator.drop_unschedulable`. All default off; `PrepareTasks` is the
+  identity then (test) and never draws random numbers, so the dataset RNG
+  stream is unchanged. Validation rejects unknown tiers, factors ≤ 0 and a
+  negative cap. `models.Server.FitsWhenIdle` is the shared fit rule
+  (audit, drop option).
+- `grid_benchmark.py --demand-scale --max-duration-ms N
+  --drop-unschedulable`; options are written to the config and
+  `meta.labels` only when on (options-off configs equal the WP3 ones except
+  labels).
+
+### Audit of each option (`results/audit_wp4_20261012_110026/`)
+
+Seeds 1–5 × 24 combos; mean infeasible workflows of the first 15:
+
+| Option set | small | medium | large |
+|---|---|---|---|
+| none (v1) | 10.9 | 8.5 | 4.6 |
+| demand_scale | 8.2 | 8.5 | 8.5 |
+| cap 30 s | 9.1 | 5.2 | 0.0 |
+| **demand_scale + cap 30 s (G1 choice)** | **5.0** | **5.2** | **5.2** |
+| drop_unschedulable + cap 30 s | 0.0 | 0.0 | 0.0 |
+| demand_scale + drop + cap 30 s | 0.0 | 0.0 | 0.0 |
+
+- The 30 s cap removes all time-infeasibility; it changes 8.0% of templates
+  (edge and fog trace-tier tasks).
+- **demand_scale does not fix capacity infeasibility.** Factors use each
+  profile's *range* maximum, but the sampled fleets rarely reach it (e.g.
+  medium seed 1: largest cloud memory 49,152 of 65,536 MB), and some tasks
+  fail only jointly. With factor 1.0 the medium profile is untouched, and
+  the large profile gets *worse* (demands × 2–4).
+- Templates dropped (means of 120) and cloud trace-tier templates kept:
+  drop + cap: small 16.0 dropped (0% of cloud-class kept), medium 6.4
+  (58%), large 0 (100%). scale + drop + cap: 7.2 / 6.4 / 6.4 dropped
+  (55% / 58% / 58% kept).
