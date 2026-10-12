@@ -29,7 +29,7 @@ down:             ## Tear down the stack and volumes
 	docker-compose down -v
 
 reproduce-grid:   ## Reproduce the thesis campaign: 24-cell grid x seeds {1,2,3} (~21.7 h)
-	python3 scripts/grid_benchmark.py --skip-topsis-weights --seeds 1,2,3
+	python3 scripts/grid_benchmark.py --skip-topsis-weights --seeds 1,2,3 --duration 30
 
 plots:            ## Regenerate thesis figures from a campaign directory: make plots GRID_DIR=results/grid_...
 	python3 scripts/grid_plot.py $(GRID_DIR)

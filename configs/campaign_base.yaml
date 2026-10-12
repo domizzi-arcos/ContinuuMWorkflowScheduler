@@ -1,0 +1,126 @@
+# Campaign base config (eval-v2).
+#
+# Provenance: this is config.local.yaml exactly as last committed (commit
+# 3a58277, deleted in 8355f81), the base the published campaign was run
+# against. Only this header was added. Host addresses are localhost because
+# scripts/grid_benchmark.py runs the binary on the host, not inside Compose.
+#
+# What scripts/grid_benchmark.py overrides for every combo (so the values
+# below are NOT what the campaign used for these keys):
+#   servers.{edge,fog,cloud}.count            <- topology
+#   servers.{edge,fog,cloud}.{cpu,memory,disk,wan_latency,cost_per_hour,power_watts}
+#                                              <- capacity profile
+#   scheduler.topsis_weights                   <- BALANCED_WEIGHTS (0.4/0.3/0.3, util 0.25)
+#   scheduler.algorithm                        <- placeholder; the runner sets it per policy
+#   experiment.duration_seconds                <- --duration
+#   servers.seed, scheduler.seed, generator.seed, generator.workflow_seed
+#                                              <- --seeds (left as below if --seeds is omitted;
+#                                                 generator.seed: 0 then samples non-deterministically)
+#
+# Keys that do reach the campaign unchanged: generator.task_count,
+# generator.dataset_path, generator.priority_min/max, redis, rabbitmq, web,
+# experiment.progress_log_seconds. These equal config.yaml's values.
+# Assumption: no later uncommitted edit of config.local.yaml changed them.
+
+# Local config — use when running outside Docker (redis/rabbitmq mapped to localhost)
+servers:
+  seed: 42
+  edge:
+    count: 3
+    cpu:
+      min: 1
+      max: 2
+    memory:
+      min: 128
+      max: 768
+      step: 128
+    disk:
+      min: 0
+      max: 20
+      step: 1
+    wan_latency:
+      min: 3
+      max: 12
+      step: 1
+    cost_per_hour: 0.02
+    power_watts:
+      min: 10
+      max: 25
+      step: 5
+  fog:
+    count: 3
+    cpu:
+      min: 4
+      max: 8
+    memory:
+      min: 2048
+      max: 8192
+      step: 512
+    disk:
+      min: 40
+      max: 140
+      step: 10
+    wan_latency:
+      min: 20
+      max: 45
+      step: 5
+    cost_per_hour: 0.25
+    power_watts:
+      min: 100
+      max: 200
+      step: 25
+  cloud:
+    count: 3
+    cpu:
+      min: 16
+      max: 32
+      step: 2
+    memory:
+      min: 16384
+      max: 65536
+      step: 4096
+    disk:
+      min: 400
+      max: 1600
+      step: 100
+    wan_latency:
+      min: 80
+      max: 160
+      step: 10
+    cost_per_hour: 1.50
+    power_watts:
+      min: 300
+      max: 600
+      step: 50
+
+scheduler:
+  algorithm: "topsis"
+  seed: 42
+  topsis_weights:
+    time:   0.4
+    cost:   0.3
+    energy: 0.3
+
+generator:
+  task_count: 120
+  seed: 0
+  dataset_path: "globus dataset/GlobusComputeDataset-v1-enriched.csv"
+  edge_max_duration_ms: 2500
+  fog_max_duration_ms: 6500
+  workflow_seed: 42
+  priority_min: 1
+  priority_max: 10
+
+redis:
+  address: "localhost:6379"
+  db: 0
+
+rabbitmq:
+  url: "amqp://guest:guest@localhost:5672/"
+
+web:
+  port: 8080
+
+experiment:
+  duration_seconds: 120
+  progress_log_seconds: 10

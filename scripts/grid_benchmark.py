@@ -21,7 +21,7 @@ Inputs
 * CLI flags (see ``parse_args``): duration, base config path, output dir,
   dry-run, resume dir, pre-built binary path, seed sweep list, and the
   ``--skip-topsis-weights`` toggle to drop the sensitivity pass.
-* The base YAML config (default ``config.local.yaml``) supplies the static
+* The base YAML config (default ``configs/campaign_base.yaml``) supplies the static
   fields (Redis/RabbitMQ endpoints, generator settings, etc.); the topology
   and capacity stanzas are mutated per combination by ``make_config``.
 
@@ -51,6 +51,8 @@ entry per (topology, capacity, weight variant[, seed]) tuple with
 """
 
 import argparse
+import hashlib
+import platform
 import copy
 import json
 import os
@@ -75,6 +77,11 @@ except ImportError:
 # plot scripts (grid_plot.py) get a stable category axis. TOPSIS is last so
 # the sensitivity sweep that follows naturally extends the same series.
 ALGORITHMS = ["round_robin", "random", "best_fit", "worst_fit", "topsis"]
+
+# Drain deadline of cmd/benchmark (-drain default) and per-run fixed overhead,
+# used only for the runtime estimate.
+DRAIN_S = 180
+RUN_OVERHEAD_S = 3
 
 # Eight topologies cover three regimes:
 #   - uniform_{s,m,l}: equal server counts per tier at increasing scale
@@ -181,7 +188,8 @@ CAPACITY_PROFILES = {
     },
 }
 
-# Balanced weights used for the main grid (match config.local.yaml).
+# Balanced weights used for the main grid. make_config always writes these,
+# so the base config's own topsis_weights never reach the main grid.
 # 'util' weights the post-placement capacity-utilisation criterion, the
 # saturation fix from Chapter 5: without it, TOPSIS keeps choosing the same
 # top server until its resources are exhausted. Note: time/cost/energy sum
@@ -209,11 +217,45 @@ def ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _run_text(cmd: list[str]) -> str | None:
+    """Run ``cmd`` and return its stripped stdout, or None if it fails."""
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def hash_host(name: str) -> str:
+    """First 16 hex chars of SHA-256 over ``name``.
+
+    Must match ``provenance.HashString`` in Go so manifests and per-run
+    ``meta.provenance`` can be joined. The raw host name is never stored.
+    """
+    return hashlib.sha256(name.encode()).hexdigest()[:16]
+
+
+def collect_provenance() -> dict:
+    """Describe the code and machine that produced this grid.
+
+    Records the git commit and dirty flag of the working tree, the Go
+    toolchain version, a hashed host name and the orchestrator's CLI args.
+    """
+    porcelain = _run_text(["git", "status", "--porcelain"])
+    return {
+        "git_commit": _run_text(["git", "rev-parse", "HEAD"]) or "unknown",
+        "git_dirty":  bool(porcelain) if porcelain is not None else None,
+        "go_version": _run_text(["go", "env", "GOVERSION"]) or "unknown",
+        "host_hash":  hash_host(platform.node()),
+        "args":       sys.argv[1:],
+    }
+
+
 def load_base_config(path: str) -> dict:
     """Load the base YAML config that every per-combo config is derived from.
 
     Args:
-        path: Filesystem path to the base YAML (e.g. ``config.local.yaml``).
+        path: Filesystem path to the base YAML (e.g. ``configs/campaign_base.yaml``).
 
     Returns:
         Parsed dict representing the full config tree.
@@ -543,10 +585,10 @@ def parse_args():
     """
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--duration",             type=int, default=90,
-                   help="seconds per algorithm run (default: 90)")
-    p.add_argument("--config",               default="config.local.yaml",
-                   help="base config file (default: config.local.yaml)")
+    p.add_argument("--duration",             type=int, default=30,
+                   help="generation window per algorithm run, in seconds (default: 30)")
+    p.add_argument("--config",               default="configs/campaign_base.yaml",
+                   help="base config file (default: configs/campaign_base.yaml)")
     p.add_argument("--output-dir",           default=None,
                    help="top-level results directory (default: results/grid_TIMESTAMP)")
     p.add_argument("--dry-run",              action="store_true",
@@ -632,7 +674,11 @@ def main():
     # Main-grid binary calls expand to 5 algo runs each; sensitivity calls
     # are 1:1. The runtime estimate assumes algo runs are roughly equal length.
     est_algo_runs = n_main * len(ALGORITHMS) + n_sensitivity
-    est_hours    = est_algo_runs * args.duration / 3600
+    # Each algo run is the generation window plus up to DRAIN_S of drain
+    # plus ~RUN_OVERHEAD_S of reset/seed/export; v1 runs always hit the drain
+    # deadline, so this is the realistic upper bound.
+    per_run_s    = args.duration + DRAIN_S + RUN_OVERHEAD_S
+    est_hours    = est_algo_runs * per_run_s / 3600
 
     print(f"\nGrid summary:")
     print(f"  Main grid runs      : {n_main} binary calls × {len(ALGORITHMS)} algorithms = {n_main * len(ALGORITHMS)} algo runs")
@@ -640,7 +686,8 @@ def main():
         print(f"  TOPSIS sensitivity  : {n_sensitivity} binary calls × 1 algorithm = {n_sensitivity} algo runs")
     print(f"  Total binary calls  : {n_total}")
     print(f"  Total algo executions: {est_algo_runs}")
-    print(f"  Estimated runtime   : {est_hours:.1f}h at {args.duration}s/run")
+    print(f"  Estimated runtime   : <= {est_hours:.1f}h at {per_run_s}s/run "
+          f"({args.duration}s window + {DRAIN_S}s drain + {RUN_OVERHEAD_S}s overhead)")
     print()
 
     if args.dry_run:
@@ -765,6 +812,7 @@ def main():
         "duration_per_run": args.duration,
         "total_elapsed_s": round(total_elapsed, 1),
         "base_config":    os.path.abspath(args.config),
+        "provenance":     collect_provenance(),
         "runs":           runs_log,
     }
     with open(manifest_path, "w") as f:

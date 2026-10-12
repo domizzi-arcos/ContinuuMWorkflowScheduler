@@ -310,7 +310,7 @@ Overnight 3-seed main-grid launcher. Verifies Docker + Redis are up, starts caff
 
 #### `load_base_config`
 
-- **Inputs**: `files_read`=['<path arg> (base YAML, default config.local.yaml)'], `env_vars`=[], `cli_flags`=['--config']
+- **Inputs**: `files_read`=['<path arg> (base YAML, default configs/campaign_base.yaml)'], `env_vars`=[], `cli_flags`=['--config']
 - **Outputs**: `files_written`=[], `stdout`=none, `return_shape`=dict (parsed YAML config tree)
 
 #### `make_config`
