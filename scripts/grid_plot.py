@@ -102,7 +102,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+
+import algorithms
 
 plt.rcParams.update({
     "font.family":     "serif",
@@ -114,26 +116,13 @@ plt.rcParams.update({
 })
 
 # ---------------------------------------------------------------------------
-# Constants (must match grid_benchmark.py)
+# Constants
 # ---------------------------------------------------------------------------
 
-ALGORITHMS = ["round_robin", "random", "best_fit", "worst_fit", "topsis"]
-
-ALGO_LABELS = {
-    "round_robin": "Round Robin",
-    "random":      "Random",
-    "best_fit":    "Best Fit",
-    "worst_fit":   "Worst Fit",
-    "topsis":      "TOPSIS",
-}
-
-COLORS = {
-    "round_robin": "#4C72B0",
-    "random":      "#DD8452",
-    "best_fit":    "#55A868",
-    "worst_fit":   "#C44E52",
-    "topsis":      "#8172B2",
-}
+# Policy names, labels and colours come from scripts/algorithms.py.
+ALGORITHMS  = algorithms.ALL
+ALGO_LABELS = algorithms.LABELS
+COLORS      = algorithms.COLORS
 
 TIERS       = ["EDGE", "FOG", "CLOUD"]
 TIER_COLORS = {"EDGE": "#E8B94F", "FOG": "#5DADE2", "CLOUD": "#58D68D"}
@@ -806,7 +795,7 @@ def plot_winner_matrix(main_data: dict, out_dir: str):
     # Algorithm → integer index used as the imshow value (matched against ``cmap``).
     algo_idx = {a: i for i, a in enumerate(ALGORITHMS)}
     # Discrete colormap with one band per algorithm.
-    cmap = matplotlib.colormaps.get_cmap("Set2").resampled(len(ALGORITHMS))
+    cmap = ListedColormap([algorithms.color(a) for a in ALGORITHMS])
 
     for ax, (metric_label, metric_key, higher_is_better) in zip(axes, metrics):
         # -1 sentinel = no winner (no data for that cell).
@@ -840,7 +829,7 @@ def plot_winner_matrix(main_data: dict, out_dir: str):
             for c in range(len(caps)):
                 idx = matrix[r, c]
                 if idx >= 0:
-                    label = ALGO_LABELS[ALGORITHMS[idx]][:2].upper()
+                    label = algorithms.ABBREV[ALGORITHMS[idx]]
                     ax.text(c, r, label, ha="center", va="center", fontsize=7,
                             color="black", fontweight="bold")
 

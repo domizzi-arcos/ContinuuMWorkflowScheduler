@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
-COPY requirements.txt ./
+COPY benchmark/analysis/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY plot.py ./
+COPY scripts/algorithms.py benchmark/analysis/plot.py ./
 ENTRYPOINT ["python", "plot.py"]
 CMD ["results"]

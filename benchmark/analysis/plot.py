@@ -25,6 +25,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "scripts"
+if _SCRIPTS.is_dir():  # repo checkout; in the image it sits next to this file
+    sys.path.insert(0, str(_SCRIPTS))
+import algorithms  # noqa: E402
+
 plt.rcParams.update({
     "font.family": "serif",
     "font.size": 11,
@@ -38,13 +43,9 @@ plt.rcParams.update({
     "axes.spines.right": False,
 })
 
-ALGO_COLORS = {
-    "round_robin": "#4C72B0",
-    "random":      "#DD8452",
-    "best_fit":    "#55A868",
-    "worst_fit":   "#C44E52",
-    "topsis":      "#8172B2",
-}
+# Policy colours and labels come from scripts/algorithms.py (copied next to
+# this file in the plotter image; found via ../../scripts in a checkout).
+ALGO_COLORS = algorithms.COLORS
 TIER_COLORS = {"EDGE": "#F28E2B", "FOG": "#76B7B2", "CLOUD": "#59A14F"}
 
 FIGURES_DIR = Path(__file__).parent / "figures"
@@ -164,7 +165,7 @@ def summary_df(experiments):
 
 
 def algo_label(name):
-    return name.replace("_", " ").title()
+    return algorithms.label(name)
 
 
 def save(fig, name):
@@ -176,13 +177,11 @@ def save(fig, name):
 
 
 def color_for(algo):
-    return ALGO_COLORS.get(algo, "#999999")
+    return algorithms.color(algo)
 
 
 def ordered_algos(df, col="algorithm"):
-    order = ["round_robin", "random", "best_fit", "worst_fit", "topsis"]
-    present = df[col].unique().tolist()
-    return [a for a in order if a in present] + [a for a in present if a not in order]
+    return algorithms.ordered(df[col].unique().tolist())
 
 
 def fig_makespan_cdf(wf):

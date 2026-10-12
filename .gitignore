@@ -37,3 +37,6 @@ globus dataset/*.pdf
 globus dataset/*.csv
 globus dataset/*.csv
 globus dataset/*.csv
+
+# Python bytecode
+__pycache__/

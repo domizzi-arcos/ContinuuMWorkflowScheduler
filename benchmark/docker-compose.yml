@@ -46,7 +46,9 @@ services:
   plotter:
     profiles: ["plot"]
     build:
-      context: ./analysis
+      # Repo root, so the image can include scripts/algorithms.py.
+      context: ..
+      dockerfile: benchmark/analysis/Dockerfile
     working_dir: /app
     volumes:
       - ./results:/app/results

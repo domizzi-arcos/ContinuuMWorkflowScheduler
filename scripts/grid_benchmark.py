@@ -63,6 +63,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import algorithms
+
 try:
     import yaml
 except ImportError:
@@ -73,10 +75,10 @@ except ImportError:
 # Grid definitions
 # ---------------------------------------------------------------------------
 
-# The five algorithms are evaluated in this fixed order so that downstream
-# plot scripts (grid_plot.py) get a stable category axis. TOPSIS is last so
-# the sensitivity sweep that follows naturally extends the same series.
-ALGORITHMS = ["round_robin", "random", "best_fit", "worst_fit", "topsis"]
+# Policies run per main-grid combo, in canonical order (scripts/algorithms.py,
+# mirrored by internal/algos). The binary runs exactly this list when no
+# -algorithm/-algorithms flag is given; it is used here for estimates.
+ALGORITHMS = algorithms.NAMES
 
 # Drain deadline of cmd/benchmark (-drain default) and per-run fixed overhead,
 # used only for the runtime estimate.

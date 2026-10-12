@@ -72,16 +72,13 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 
-# Canonical ordering for the five scheduling algorithms. This ordering controls
-# column order in every heatmap, bar chart and table so the reader sees a
-# consistent left-to-right sweep across the report.
-ALGOS = ["round_robin", "random", "best_fit", "worst_fit", "topsis"]
-# Per-algorithm fixed palette. Reused everywhere so the same colour always
-# means the same algorithm across all figures.
-ALGO_COLORS = {
-    "round_robin": "#3b82f6", "random": "#a855f7",
-    "best_fit": "#10b981", "worst_fit": "#f59e0b", "topsis": "#ef4444",
-}
+import algorithms
+
+# Canonical policy order and fixed palette, from scripts/algorithms.py. The
+# order controls column order in every heatmap, bar chart and table; the same
+# colour always means the same policy across all figures.
+ALGOS = algorithms.ALL
+ALGO_COLORS = algorithms.COLORS
 # TOPSIS weight vectors evaluated in the sensitivity sweep (Section 6).
 WEIGHTS = ["time", "cost", "energy"]
 WEIGHT_COLORS = {"time": "#3b82f6", "cost": "#10b981", "energy": "#f59e0b"}

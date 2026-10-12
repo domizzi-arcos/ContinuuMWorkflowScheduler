@@ -80,29 +80,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+import algorithms
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 # Canonical algorithm order: drives bar order, legend order, and color keys.
 # Any algorithm absent from a given benchmark is filtered out by present_algos.
-ALGORITHMS = ["round_robin", "random", "best_fit", "worst_fit", "topsis"]
-
-ALGO_LABELS = {
-    "round_robin": "Round Robin",
-    "random":      "Random",
-    "best_fit":    "Best Fit",
-    "worst_fit":   "Worst Fit",
-    "topsis":      "TOPSIS",
-}
-
-COLORS = {
-    "round_robin": "#4C72B0",
-    "random":      "#DD8452",
-    "best_fit":    "#55A868",
-    "worst_fit":   "#C44E52",
-    "topsis":      "#8172B2",
-}
+# Names, labels and colours come from scripts/algorithms.py.
+ALGORITHMS  = algorithms.ALL
+ALGO_LABELS = algorithms.LABELS
+COLORS      = algorithms.COLORS
 
 # Three-tier infrastructure ordering. EDGE→FOG→CLOUD is the conventional bottom-up
 # ordering used for stacked tier-distribution bars and heatmap columns.
