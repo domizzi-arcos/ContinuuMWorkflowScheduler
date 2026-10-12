@@ -14,7 +14,7 @@ import (
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 )
 
-var algorithms = algos.Names()
+var algorithms = algos.Legacy()
 
 func main() {
 	duration := flag.Int("duration", 60, "seconds each algorithm runs before generation stops")

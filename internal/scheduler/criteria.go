@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"math"
 	"sort"
 
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
@@ -41,4 +42,30 @@ func sortedByID(candidates []*models.Server) []*models.Server {
 	copy(sorted, candidates)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 	return sorted
+}
+
+// single returns the only candidate, or nil for an empty slice.
+func single(candidates []*models.Server) *models.Server {
+	if len(candidates) == 0 {
+		return nil
+	}
+	return candidates[0]
+}
+
+// tieTolerance is the relative difference below which two scores are
+// treated as equal by the v2 baselines. Mathematically equal scores can
+// differ in the last bits depending on how they were computed; treating them
+// as ties lets the documented tie-break (next key, then lower ID) decide.
+const tieTolerance = 1e-9
+
+// lexLess reports whether key a sorts strictly before key b, comparing
+// element by element; elements within tieTolerance (relative) are equal.
+// Equal keys leave the earlier (lower-ID) candidate in place.
+func lexLess(a, b []float64) bool {
+	for i := range a {
+		if math.Abs(a[i]-b[i]) > tieTolerance*math.Max(math.Abs(a[i]), math.Abs(b[i])) {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }

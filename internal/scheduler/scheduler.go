@@ -1,8 +1,7 @@
 // Package scheduler dispatches pending executions to tier-specific RabbitMQ
 // queues by selecting a server via a pluggable Algorithm. It defines the
 // Algorithm interface, owns the 500 ms polling loop that drains PENDING
-// executions from Redis, and ships five built-in policies: round_robin,
-// random, best_fit, worst_fit, and TOPSIS.
+// executions from Redis, and ships the policies registered in internal/algos.
 package scheduler
 
 import (
@@ -56,9 +55,11 @@ func New(s *store.RedisStore, b *broker.Broker, algorithm Algorithm, executionID
 }
 
 // NewAlgorithm creates an Algorithm from the config string.
-// wTime, wCost, wEnergy, wUtil are the TOPSIS criterion weights
-// (only used when name == "topsis"). wUtil weights post-placement capacity
-// utilisation; pass 0 to disable and recover 3-criterion TOPSIS.
+// wTime, wCost, wEnergy, wUtil are the TOPSIS criterion weights, used by
+// topsis and weighted_sum (all four) and topsis_u0 (the first three). wUtil
+// weights post-placement capacity utilisation; pass 0 to disable and recover
+// 3-criterion TOPSIS. Unknown names fall back to round robin; callers should
+// validate names with algos.Valid first.
 func NewAlgorithm(name string, seed int64, wTime, wCost, wEnergy, wUtil float64) Algorithm {
 	switch strings.ToLower(name) {
 	case "random":
@@ -69,6 +70,18 @@ func NewAlgorithm(name string, seed int64, wTime, wCost, wEnergy, wUtil float64)
 		return NewWorstFit()
 	case "topsis":
 		return NewTOPSIS(wTime, wCost, wEnergy, wUtil)
+	case "min_cost":
+		return NewMinCost()
+	case "min_energy":
+		return NewMinEnergy()
+	case "eft":
+		return NewEFT()
+	case "weighted_sum":
+		return NewWeightedSum(wTime, wCost, wEnergy, wUtil)
+	case "topsis_u0":
+		return NewTOPSISU0(wTime, wCost, wEnergy)
+	case "best_fit_norm":
+		return NewBestFitNorm()
 	default:
 		return NewRoundRobin()
 	}

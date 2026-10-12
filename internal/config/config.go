@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/pcturnes/distributed-workflow-scheduler/internal/algos"
 )
 
 // IntRange describes a discrete inclusive integer range [Min, Max] with the
@@ -116,7 +119,7 @@ type TOPSISWeights struct {
 
 // SchedulerConfig selects the placement algorithm and parameterizes it.
 type SchedulerConfig struct {
-	Algorithm     string        `yaml:"algorithm"`      // round_robin | random | best_fit | worst_fit | topsis
+	Algorithm     string        `yaml:"algorithm"`      // any name registered in internal/algos
 	Seed          int64         `yaml:"seed"`           // 0 = non-deterministic (time-based)
 	TOPSISWeights TOPSISWeights `yaml:"topsis_weights"` // only consulted when Algorithm == "topsis"
 }
@@ -200,12 +203,8 @@ func (cfg *Config) Validate() error {
 	if cfg.Web.Port < 1 || cfg.Web.Port > 65535 {
 		return fmt.Errorf("web.port %d is out of range [1, 65535]", cfg.Web.Port)
 	}
-	validAlgos := map[string]bool{
-		"round_robin": true, "random": true, "best_fit": true,
-		"worst_fit": true, "topsis": true,
-	}
-	if !validAlgos[cfg.Scheduler.Algorithm] {
-		return fmt.Errorf("scheduler.algorithm %q is not valid (must be one of: round_robin, random, best_fit, worst_fit, topsis)", cfg.Scheduler.Algorithm)
+	if !algos.Valid(cfg.Scheduler.Algorithm) {
+		return fmt.Errorf("scheduler.algorithm %q is not valid (must be one of: %s)", cfg.Scheduler.Algorithm, strings.Join(algos.All(), ", "))
 	}
 	if cfg.Generator.TaskCount <= 0 {
 		return fmt.Errorf("generator.task_count must be > 0, got %d", cfg.Generator.TaskCount)
