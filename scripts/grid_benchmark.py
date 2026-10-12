@@ -435,7 +435,9 @@ def build_binary(binary_path: str) -> bool:
 
 
 def run_binary(binary: str, config_path: str, output_dir: str,
-               duration: int, algorithm: str | None = None) -> bool:
+               duration: int, algorithm: str | None = None,
+               algorithms_csv: str | None = None,
+               drain: int | None = None) -> bool:
     """Invoke the Go benchmark binary for a single combination.
 
     Output is NOT captured so progress logs from the Go side stream live
@@ -447,7 +449,10 @@ def run_binary(binary: str, config_path: str, output_dir: str,
         output_dir: Directory the binary writes its JSON results into.
         duration: Seconds to simulate (matches ``experiment.duration_seconds``).
         algorithm: When given, restricts the binary to a single algorithm.
-            Otherwise the binary cycles through all five.
+        algorithms_csv: Otherwise, an optional comma-separated subset passed
+            as ``-algorithms``; when None the binary runs every default
+            policy (``algorithms.NAMES``).
+        drain: Drain deadline in seconds (``-drain``); binary default if None.
 
     Returns:
         True iff the subprocess exited with code 0.
@@ -460,6 +465,10 @@ def run_binary(binary: str, config_path: str, output_dir: str,
     ]
     if algorithm:
         cmd += ["-algorithm", algorithm]
+    elif algorithms_csv:
+        cmd += ["-algorithms", algorithms_csv]
+    if drain is not None:
+        cmd += ["-drain", str(drain)]
 
     print(f"  $ {' '.join(cmd)}")
     result = subprocess.run(cmd, text=True)
@@ -646,6 +655,17 @@ def parse_args():
                    help="top-level results directory (default: results/grid_TIMESTAMP)")
     p.add_argument("--dry-run",              action="store_true",
                    help="print all combinations without executing")
+    p.add_argument("--algorithms",           default=None,
+                   help="comma-separated policies for main-grid combos (default: all of "
+                        "scripts/algorithms.NAMES); passed to the binary as -algorithms")
+    p.add_argument("--topologies",           default=None,
+                   help="comma-separated topology labels to run (default: all 8)")
+    p.add_argument("--capacities",           default=None,
+                   help="comma-separated capacity profiles to run (default: small,medium,large)")
+    p.add_argument("--drain",                type=int, default=DRAIN_S,
+                   help=f"drain deadline per run in seconds (default: {DRAIN_S})")
+    p.add_argument("--tag",                  default=None,
+                   help="suffix for the output directory name: results/grid_<UTC>_<tag>")
     p.add_argument("--demand-scale",         action="store_true",
                    help="scale task demands per tier by profile max / medium max (WP4)")
     p.add_argument("--max-duration-ms",      type=int, default=0,
@@ -682,6 +702,27 @@ def main():
         sys.exit(1)
 
     base_cfg = load_base_config(args.config)
+
+    def csv_list(value, valid, what):
+        if value is None:
+            return None
+        items = [v.strip() for v in value.split(",") if v.strip()]
+        bad = [v for v in items if v not in valid]
+        if bad or not items or len(set(items)) != len(items):
+            print(f"Error: --{what} must be distinct values from {list(valid)}, got {value!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+        return items
+
+    sel_algos = csv_list(args.algorithms, algorithms.ALL, "algorithms")
+    sel_topos = csv_list(args.topologies, [t["label"] for t in TOPOLOGIES], "topologies")
+    sel_caps  = csv_list(args.capacities, list(CAPACITY_PROFILES), "capacities")
+    run_algos = sel_algos or ALGORITHMS
+    algorithms_csv = ",".join(sel_algos) if sel_algos else None
+    if args.tag is not None and not all(ch.isalnum() or ch in "-_" for ch in args.tag):
+        print(f"Error: --tag may contain only letters, digits, '-' and '_', got {args.tag!r}",
+              file=sys.stderr)
+        sys.exit(1)
     workload = {
         "demand_scale":       args.demand_scale,
         "max_duration_ms":    args.max_duration_ms,
@@ -699,7 +740,8 @@ def main():
         print(f"Resuming grid run in: {grid_dir}")
     else:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        grid_dir = args.output_dir or f"results/grid_{stamp}"
+        suffix = f"_{args.tag}" if args.tag else ""
+        grid_dir = args.output_dir or f"results/grid_{stamp}{suffix}"
         os.makedirs(grid_dir, exist_ok=True)
         print(f"Grid output dir: {grid_dir}")
 
@@ -727,34 +769,64 @@ def main():
         else:
             print(f"Seed sweep enabled: every combo will run with seeds {seeds}")
 
-    # Materialise the full work list. --skip-topsis-weights drops the
-    # 72-call sensitivity pass entirely (cuts ~37% of the runtime).
-    all_combos = generate_main_grid(grid_dir, seeds)
-    if not args.skip_topsis_weights:
-        all_combos += generate_topsis_sensitivity(grid_dir, seeds)
+    # Every option that changes what is run. Saved on a fresh run and checked
+    # on --resume, so a resumed grid can never mix configurations.
+    options = {
+        "config":             os.path.abspath(args.config),
+        "duration":           args.duration,
+        "drain":              args.drain,
+        "seeds":              seeds,
+        "algorithms":         run_algos,
+        "topologies":         sel_topos,
+        "capacities":         sel_caps,
+        "skip_topsis_weights": args.skip_topsis_weights,
+        "workload":           workload,
+    }
+    options_path = os.path.join(grid_dir, "grid_options.json")
+    if args.resume and os.path.exists(options_path):
+        with open(options_path) as f:
+            saved = json.load(f)
+        diff = sorted(k for k in set(saved) | set(options) if saved.get(k) != options.get(k))
+        if diff:
+            print(f"Error: --resume options differ from the original run in {diff}; "
+                  f"re-run with the original flags (see {options_path})", file=sys.stderr)
+            sys.exit(1)
+    elif not args.dry_run:
+        with open(options_path, "w") as f:
+            json.dump(options, f, indent=2)
 
-    # Recompute the per-pass counts for the summary print. Regenerating is
-    # cheap and avoids tracking lengths through the conditional above.
-    n_main       = len(generate_main_grid(grid_dir, seeds))
-    n_sensitivity = 0 if args.skip_topsis_weights else len(generate_topsis_sensitivity(grid_dir, seeds))
-    n_total      = len(all_combos)
-    # Main-grid binary calls expand to 5 algo runs each; sensitivity calls
-    # are 1:1. The runtime estimate assumes algo runs are roughly equal length.
-    est_algo_runs = n_main * len(ALGORITHMS) + n_sensitivity
+    def selected(c):
+        return ((sel_topos is None or c["topology"]["label"] in sel_topos) and
+                (sel_caps is None or c["capacity_name"] in sel_caps))
+
+    # Materialise the full work list. --skip-topsis-weights drops the
+    # 72-call sensitivity pass entirely; --topologies/--capacities filter both.
+    main_combos = [c for c in generate_main_grid(grid_dir, seeds) if selected(c)]
+    sens_combos = [] if args.skip_topsis_weights else \
+        [c for c in generate_topsis_sensitivity(grid_dir, seeds) if selected(c)]
+    all_combos = main_combos + sens_combos
+
+    n_main        = len(main_combos)
+    n_sensitivity = len(sens_combos)
+    n_total       = len(all_combos)
+    # Main-grid binary calls expand to one run per selected policy;
+    # sensitivity calls are 1:1. Runs are assumed roughly equal length.
+    est_algo_runs = n_main * len(run_algos) + n_sensitivity
     # Each algo run is the generation window plus up to DRAIN_S of drain
     # plus ~RUN_OVERHEAD_S of reset/seed/export; v1 runs always hit the drain
     # deadline, so this is the realistic upper bound.
-    per_run_s    = args.duration + DRAIN_S + RUN_OVERHEAD_S
+    per_run_s    = args.duration + args.drain + RUN_OVERHEAD_S
     est_hours    = est_algo_runs * per_run_s / 3600
 
     print(f"\nGrid summary:")
-    print(f"  Main grid runs      : {n_main} binary calls × {len(ALGORITHMS)} algorithms = {n_main * len(ALGORITHMS)} algo runs")
+    print(f"  Main grid runs      : {n_main} binary calls × {len(run_algos)} algorithms = {n_main * len(run_algos)} algo runs")
     if not args.skip_topsis_weights:
         print(f"  TOPSIS sensitivity  : {n_sensitivity} binary calls × 1 algorithm = {n_sensitivity} algo runs")
     print(f"  Total binary calls  : {n_total}")
     print(f"  Total algo executions: {est_algo_runs}")
     print(f"  Estimated runtime   : <= {est_hours:.1f}h at {per_run_s}s/run "
-          f"({args.duration}s window + {DRAIN_S}s drain + {RUN_OVERHEAD_S}s overhead)")
+          f"({args.duration}s window + {args.drain}s drain + {RUN_OVERHEAD_S}s overhead; "
+          f"less when runs drain early)")
     print()
 
     if args.emit_configs_only:
@@ -774,7 +846,7 @@ def main():
         print("DRY RUN — combinations that would execute:\n")
         for i, c in enumerate(all_combos, 1):
             topo = c["topology"]
-            algo = c["algorithm"] or "all-5"
+            algo = c["algorithm"] or f"{len(run_algos)} policies"
             w    = c["topsis_weights"]["label"] if c["topsis_weights"] else "balanced"
             print(f"  {i:3d}. {c['combo_id']:<55} algo={algo:<10} weights={w}")
         return
@@ -839,7 +911,8 @@ def main():
         # Time the subprocess so the manifest records elapsed wall-time per
         # combo — useful for spotting outliers or scheduling cost regressions.
         t0      = time.time()
-        success = run_binary(binary, cfg_path, out_dir, args.duration, algorithm)
+        success = run_binary(binary, cfg_path, out_dir, args.duration, algorithm,
+                             algorithms_csv=algorithms_csv, drain=args.drain)
         elapsed = time.time() - t0
 
         status = "done" if success else "failed"
@@ -864,6 +937,7 @@ def main():
             "output_dir":     out_dir,
             "status":         status,
             "duration_s":     args.duration,
+            "algorithms":     [algorithm] if algorithm else run_algos,
             "elapsed_s":      round(elapsed, 1),
             "completed_at":   ts(),
         })
@@ -888,6 +962,7 @@ def main():
         "grid_dir":       os.path.abspath(grid_dir),
         "created_at":     ts(),
         "duration_per_run": args.duration,
+        "options":        options,
         "total_elapsed_s": round(total_elapsed, 1),
         "base_config":    os.path.abspath(args.config),
         "provenance":     collect_provenance(),
