@@ -10,6 +10,7 @@ import (
 
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/config"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
+	"github.com/pcturnes/distributed-workflow-scheduler/internal/provenance"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 )
 
@@ -34,6 +35,9 @@ type ExperimentMeta struct {
 	TaskCount     int                  `json:"task_count"`
 	NumServers    map[string]int       `json:"num_servers"`
 	TOPSISWeights config.TOPSISWeights `json:"topsis_weights,omitempty"`
+	// Provenance is set by the campaign runner (cmd/benchmark); it is absent
+	// from files written by the interactive app and the legacy runner.
+	Provenance *provenance.Info `json:"provenance,omitempty"`
 }
 
 // ExperimentSummary holds the aggregate metrics computed at end-of-run by
@@ -82,26 +86,39 @@ type ServerSnapshot struct {
 	ActiveTasks    int    `json:"active_tasks"`
 }
 
+// RunInfo carries run-level metadata from the runner into the exported file.
+// The zero value reproduces the output of Export.
+type RunInfo struct {
+	Provenance *provenance.Info
+}
+
 // Export reads all task results, workflow instances, and server state from
 // Redis, builds the aggregate summary, and writes the combined JSON to a
 // timestamped file under outputDir. The filename encodes the algorithm and
 // per-tier server counts so the grid runner can scan a results directory
-// without re-opening every file.
+// without re-opening every file. Errors are logged, not returned; use
+// ExportRun to observe them.
 func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration, outputDir string) {
+	_, _ = ExportRun(s, cfg, wallDuration, outputDir, RunInfo{})
+}
+
+// ExportRun is Export with run metadata and error reporting. It returns the
+// path of the written file.
+func ExportRun(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration, outputDir string, info RunInfo) (string, error) {
 	tasks, err := s.GetAllTaskResults()
 	if err != nil {
 		slog.Error("failed to load task results", "component", "exporter", "err", err)
-		return
+		return "", fmt.Errorf("failed to load task results: %w", err)
 	}
 	workflows, err := s.GetAllWorkflowInstances()
 	if err != nil {
 		slog.Error("failed to load workflow instances", "component", "exporter", "err", err)
-		return
+		return "", fmt.Errorf("failed to load workflow instances: %w", err)
 	}
 	servers, err := s.GetAllServers()
 	if err != nil {
 		slog.Error("failed to load servers", "component", "exporter", "err", err)
-		return
+		return "", fmt.Errorf("failed to load servers: %w", err)
 	}
 
 	numServers := map[string]int{"EDGE": 0, "FOG": 0, "CLOUD": 0}
@@ -123,6 +140,7 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration,
 		TaskCount:     cfg.Generator.TaskCount,
 		NumServers:    numServers,
 		TOPSISWeights: cfg.Scheduler.TOPSISWeights,
+		Provenance:    info.Provenance,
 	}
 
 	summary := buildSummary(tasks, workflows, wallDuration)
@@ -149,7 +167,7 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration,
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		slog.Error("cannot create output directory", "component", "exporter", "err", err)
-		return
+		return "", fmt.Errorf("cannot create output directory: %w", err)
 	}
 
 	ts := time.Now().UTC().Format("20060102_150405")
@@ -163,13 +181,14 @@ func Export(s *store.RedisStore, cfg *config.Config, wallDuration time.Duration,
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		slog.Error("JSON marshal failed", "component", "exporter", "err", err)
-		return
+		return "", fmt.Errorf("JSON marshal failed: %w", err)
 	}
 	if err := os.WriteFile(filename, data, 0644); err != nil {
 		slog.Error("write failed", "component", "exporter", "err", err)
-		return
+		return "", fmt.Errorf("write failed: %w", err)
 	}
 	slog.Info("results exported", "component", "exporter", "tasks", len(tasks), "workflows", len(wfSummaries), "file", filename)
+	return filename, nil
 }
 
 // buildSummary aggregates per-tier and overall metrics from the task list,

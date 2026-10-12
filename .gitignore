@@ -16,6 +16,8 @@ config.local.yaml
 # Runtime outputs (re-created on every simulation run)
 logs/
 results/
+# ...but not the Go package of the same name
+!internal/results/
 figures/
 *.log
 
