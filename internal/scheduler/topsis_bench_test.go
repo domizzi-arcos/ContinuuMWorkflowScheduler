@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/pcturnes/distributed-workflow-scheduler/internal/algos"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 )
 
-// benchServers builds n deterministic candidate servers spread across the
-// cost/energy/latency space so TOPSIS has a non-degenerate matrix to score.
 func benchServers(n int) []*models.Server {
 	servers := make([]*models.Server, n)
 	for i := 0; i < n; i++ {
@@ -29,12 +28,30 @@ func benchServers(n int) []*models.Server {
 	return servers
 }
 
-// BenchmarkTOPSISSelect measures the per-decision cost of the TOPSIS policy as
-// the candidate pool grows. The point of sweeping N is to show where the
-// numeric inner loops (vecNorm / weightedNorm / distance) actually start to
-// matter: at the experiment's real pool sizes (3-9 servers/tier) the cost is
-// dominated by sort + allocation, not arithmetic, which is why vectorisation
-// (Go 1.26 simd) buys nothing here. It only becomes relevant in the thousands.
+// BenchmarkSelect measures one placement decision for every registered
+// policy at candidate-set sizes spanning the campaign topologies (6, 15, 24
+// nodes) plus 100. This is the decision-overhead table of the paper:
+// go test -bench=Select -benchmem -run='^$' ./internal/scheduler/
+func BenchmarkSelect(b *testing.B) {
+	task := &models.Task{ID: "t", Name: "bench", CPU: 2, Memory: 2048, Disk: 20, Duration: 1500, TargetTier: "FOG"}
+	for _, name := range algos.All() {
+		for _, n := range []int{6, 15, 24, 100} {
+			servers := benchServers(n)
+			algo := NewAlgorithm(name, 42, 0.4, 0.3, 0.3, 0.25)
+			b.Run(fmt.Sprintf("%s/n=%d", name, n), func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					if got := algo.Select(task, servers); got == nil {
+						b.Fatal("nil selection")
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkTOPSISSelect is the v1 benchmark, kept for comparison with
+// earlier measurements.
 func BenchmarkTOPSISSelect(b *testing.B) {
 	task := &models.Task{ID: "t", Name: "bench", CPU: 2, Memory: 2048, Disk: 20, Duration: 1500, TargetTier: "FOG"}
 	tp := NewTOPSIS(0.4, 0.3, 0.3, 0.25)
