@@ -40,13 +40,38 @@ type serverProfile struct {
 	power   int
 }
 
-// SeedServers generates Edge, Fog, and Cloud server records by sampling each
-// tier's configured capacity ranges and persists them via the supplied
-// RedisStore. Each tier uses an independent RNG derived from the base seed so
-// runs with the same seed produce identical fleets.
+// SeedServers generates Edge, Fog, and Cloud server records with
+// BuildServers and persists them via the supplied RedisStore.
 func SeedServers(s *store.RedisStore, cfg *config.Config) error {
-	_, seed := newServerSeedRNG(cfg.Servers.Seed)
+	servers, seed, err := buildServers(cfg)
 	slog.Info("randomizing server capacities", "component", "seeder", "seed", seed)
+	if err != nil {
+		return err
+	}
+	for _, srv := range servers {
+		if err := s.StoreServer(srv); err != nil {
+			return fmt.Errorf("storing server %s: %w", srv.ID, err)
+		}
+		slog.Debug("server seeded", "component", "seeder",
+			"id", srv.ID, "type", srv.Type, "cpu", srv.MaxCPU,
+			"mem_mb", srv.MaxMemory, "disk_gb", srv.MaxDisk,
+			"latency_ms", srv.Latency, "cost_per_hr", srv.CostPerHour, "power_w", srv.PowerWatts,
+		)
+	}
+	return nil
+}
+
+// BuildServers samples the Edge, Fog and Cloud fleets from cfg without
+// touching Redis. Each tier i (edge=0, fog=1, cloud=2) uses an independent
+// RNG seeded with servers.seed+i, so the same seed yields the same fleet.
+// A seed of 0 is replaced by the wall clock (non-reproducible).
+func BuildServers(cfg *config.Config) ([]*models.Server, error) {
+	servers, _, err := buildServers(cfg)
+	return servers, err
+}
+
+func buildServers(cfg *config.Config) ([]*models.Server, int64, error) {
+	_, seed := newServerSeedRNG(cfg.Servers.Seed)
 
 	tiers := []tierSeedConfig{
 		{
@@ -84,27 +109,18 @@ func SeedServers(s *store.RedisStore, cfg *config.Config) error {
 		},
 	}
 
+	var all []*models.Server
 	for i, tier := range tiers {
 		// Offset the seed per tier so tiers are independent yet still
 		// reproducible from the single configured base seed.
 		rng := rand.New(rand.NewSource(seed + int64(i)))
 		servers, err := buildTierServers(tier, rng)
 		if err != nil {
-			return err
+			return nil, seed, err
 		}
-		for _, srv := range servers {
-			if err := s.StoreServer(srv); err != nil {
-				return fmt.Errorf("storing server %s: %w", srv.ID, err)
-			}
-			slog.Debug("server seeded", "component", "seeder",
-				"id", srv.ID, "type", srv.Type, "cpu", srv.MaxCPU,
-				"mem_mb", srv.MaxMemory, "disk_gb", srv.MaxDisk,
-				"latency_ms", srv.Latency, "cost_per_hr", srv.CostPerHour, "power_w", srv.PowerWatts,
-			)
-		}
+		all = append(all, servers...)
 	}
-
-	return nil
+	return all, seed, nil
 }
 
 // buildTierServers samples `tier.count` unique server profiles from the tier's

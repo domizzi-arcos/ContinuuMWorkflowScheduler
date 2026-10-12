@@ -141,3 +141,22 @@ func compareGolden(t *testing.T, path, got string) {
 		t.Fatalf("output differs from %s; diff it against a run with -update", path)
 	}
 }
+
+// TestBuildServersMatchesSeedServers checks the pure builder yields exactly
+// the fleet SeedServers stores, for every golden configuration.
+func TestBuildServersMatchesSeedServers(t *testing.T) {
+	for _, profile := range []string{"small", "medium", "large"} {
+		for ti := range goldenTopologies {
+			for _, seed := range goldenSeeds {
+				cfg := goldenConfig(t, profile, ti, seed)
+				built, err := BuildServers(cfg)
+				if err != nil {
+					t.Fatalf("BuildServers: %v", err)
+				}
+				if got, want := formatServers(built), formatServers(seededViaRedis(t, cfg)); got != want {
+					t.Fatalf("%s topo=%d seed=%d: BuildServers differs from SeedServers\n got:\n%s want:\n%s", profile, ti, seed, got, want)
+				}
+			}
+		}
+	}
+}
