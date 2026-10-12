@@ -338,3 +338,10 @@ Seeds 1–5 × 24 combos; mean infeasible workflows of the first 15:
   drop + cap: small 16.0 dropped (0% of cloud-class kept), medium 6.4
   (58%), large 0 (100%). scale + drop + cap: 7.2 / 6.4 / 6.4 dropped
   (55% / 58% / 58% kept).
+
+### GATE G2 decision (user, 2026-10-12)
+
+**demand_scale + drop_unschedulable + max_duration_ms 30000.** Every
+workflow is completable in all 120 audited configs; 6–7 of 120 templates
+dropped per profile, 55–58% of cloud trace-tier templates kept. Grid flags:
+`--demand-scale --drop-unschedulable --max-duration-ms 30000`.
