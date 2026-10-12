@@ -593,6 +593,9 @@ def parse_args():
                    help="top-level results directory (default: results/grid_TIMESTAMP)")
     p.add_argument("--dry-run",              action="store_true",
                    help="print all combinations without executing")
+    p.add_argument("--emit-configs-only",    action="store_true",
+                   help="write _configs/<combo>.yaml for every combination and exit "
+                        "without building or running anything (input for cmd/audit)")
     p.add_argument("--skip-topsis-weights",  action="store_true",
                    help="skip TOPSIS weight sensitivity runs")
     p.add_argument("--resume",               default=None, metavar="DIR",
@@ -689,6 +692,15 @@ def main():
     print(f"  Estimated runtime   : <= {est_hours:.1f}h at {per_run_s}s/run "
           f"({args.duration}s window + {DRAIN_S}s drain + {RUN_OVERHEAD_S}s overhead)")
     print()
+
+    if args.emit_configs_only:
+        for c in all_combos:
+            cfg = make_config(base_cfg, c["topology"], CAPACITY_PROFILES[c["capacity_name"]],
+                              args.duration, topsis_weights=c["topsis_weights"],
+                              algorithm=c["algorithm"], seed=c.get("seed"))
+            write_temp_config(cfg, os.path.join(configs_dir, f"{c['combo_id']}.yaml"))
+        print(f"Wrote {len(all_combos)} configs to {configs_dir}")
+        return
 
     if args.dry_run:
         # Dry-run prints the work plan and exits with no side effects on
