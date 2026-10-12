@@ -19,6 +19,8 @@ results/
 # ...but not the Go package of the same name
 !internal/results/
 figures/
+analysis_out/
+.pytest_cache/
 *.log
 
 # IDE / editor
