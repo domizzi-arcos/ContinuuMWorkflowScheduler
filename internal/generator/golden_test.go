@@ -115,3 +115,34 @@ func TestGeneratorDrawsGolden(t *testing.T) {
 		t.Fatalf("live draws differ from %s", path)
 	}
 }
+
+// TestReplayMatchesLiveDraws checks ReplayWorkflows reproduces the live
+// generator's draws for every golden case.
+func TestReplayMatchesLiveDraws(t *testing.T) {
+	for _, c := range drawCases {
+		live := liveDraws(t, c, goldenWorkflows)
+		draws, err := ReplayWorkflows(syntheticTasks(c.nTasks), c.seed, c.prioMin, c.prioMax, goldenWorkflows)
+		if err != nil {
+			t.Fatalf("%s: ReplayWorkflows: %v", caseLabel(c), err)
+		}
+		if len(draws) != len(live) {
+			t.Fatalf("%s: %d replayed, %d live", caseLabel(c), len(draws), len(live))
+		}
+		for i, d := range draws {
+			ids := make([]string, len(d.Tasks))
+			for k, task := range d.Tasks {
+				ids[k] = task.ID
+			}
+			got := fmt.Sprintf("%s p=%d %s", d.Template.Name, d.Priority, strings.Join(ids, ","))
+			if got != live[i] || d.Seq != i {
+				t.Fatalf("%s workflow %d: replay %q (seq %d), live %q", caseLabel(c), i, got, d.Seq, live[i])
+			}
+		}
+	}
+}
+
+func TestReplayRejectsSeedZero(t *testing.T) {
+	if _, err := ReplayWorkflows(syntheticTasks(3), 0, 1, 10, 1); err == nil {
+		t.Fatal("want error for seed 0")
+	}
+}
