@@ -521,3 +521,30 @@ Output `results/grid_20261012_132435_c3/`, log
 `results/c3_launch_20261012_132435.log`. 120 combos × 10 policies = 1,200
 runs; expected 21–27 h (upper bound 71 h). Resume after an interruption
 with the same flags plus `--resume results/grid_20261012_132435_c3`.
+
+## WP8 — Anonymised artefact
+
+`scripts/make_artifact.sh OUT_DIR`: `git archive HEAD` (no `.git`,
+`results/`, `CLAUDE.md`), module path → `anonymous/wfsched`, LICENSE holder
+→ "Anonymous Authors", README citation section and every README paragraph
+containing an identifying string removed, notebook outputs cleared (beyond
+the plan: `globus dataset/analysis.ipynb` outputs embed a home-directory
+path), then `go build ./... && go test ./...` and a whole-word,
+case-insensitive scan that fails on any identifying string, reporting only
+file:line. The identifying strings (12) are derived at run time from
+go.mod, the README citation, LICENSE and `git config user.*`; none is
+stored in the repo. Whole-word matching avoids false hits such as a
+surname inside "canonical".
+
+Run on 2026-10-12 into the scratchpad: builds, tests pass, scan clean; a
+manual spot-check for an institution acronym and local paths was also
+clean.
+
+Open for the user (not changed):
+- The README still credits the upstream project with a GitHub link. A
+  reviewer could follow the fork network to the authors' repository;
+  removing the credit may conflict with the upstream licence. Decide
+  whether to replace it with "based on an open-source task scheduler
+  (reference withheld for review)".
+- The README calls the system a "discrete-event simulator"; §6 asks
+  for "emulator" wording in anything reaching reviewers.
