@@ -197,4 +197,4 @@ completable workflows is **6.69 of 15 per run** (small 3.83, medium 6.58,
 large 9.67). The paper reports 6.5–6.6 completed per run. If the rebuilt
 dataset matches the original, capacity + time infeasibility account for
 ≈ 98% of incomplete workflows (8.31 of ≈ 8.45). Without the time bound,
-capacity alone would explain ≈ 5.3 per run, about 63%.
+capacity alone explains 4.28 per run (≈ 51%); time alone 4.03 (≈ 48%).
