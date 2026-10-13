@@ -24,9 +24,10 @@ _fail() {  # message log
   return 1
 }
 
-_wait_port() {  # port timeout_s
+_wait_port() {  # port timeout_s pidfile: fails early if the process exits
   local t=0
   until ! _port_free "$1"; do
+    if ! kill -0 "$(cat "$3")" 2>/dev/null; then return 1; fi
     sleep 1
     t=$((t + 1))
     if [ "$t" -ge "$2" ]; then return 1; fi
@@ -51,10 +52,15 @@ services_start() {
     > "$dir/redis.log" 2>&1 &
   echo $! > "$dir/redis.pid"
 
+  # No plugins: the image enables rabbitmq_prometheus, which listens on the
+  # fixed port 15692 on all interfaces, so a second job on the node fails
+  # with eaddrinuse. The benchmark only needs AMQP.
+  echo "[]." > "$dir/rabbitmq/home/enabled_plugins"
   local node="rabbit_${base}@localhost"
   apptainer exec --cleanenv --containall --pid \
     --home "$dir/rabbitmq/home:/var/lib/rabbitmq" \
     --env RABBITMQ_NODENAME="$node" \
+    --env RABBITMQ_ENABLED_PLUGINS_FILE=/var/lib/rabbitmq/enabled_plugins \
     --env RABBITMQ_NODE_IP_ADDRESS=127.0.0.1 \
     --env RABBITMQ_NODE_PORT="$amqp_port" \
     --env RABBITMQ_DIST_PORT="$dist_port" \
@@ -66,12 +72,12 @@ services_start() {
     "$SIF_DIR/rabbitmq.sif" rabbitmq-server > "$dir/rabbitmq.log" 2>&1 &
   echo $! > "$dir/rabbitmq.pid"
 
-  if ! _wait_port "$redis_port" 60; then
-    _fail "Redis did not open port $redis_port" "$dir/redis.log"
+  if ! _wait_port "$redis_port" 60 "$dir/redis.pid"; then
+    _fail "Redis did not open port $redis_port (exited, or not up within 60 s)" "$dir/redis.log"
     return 1
   fi
-  if ! _wait_port "$amqp_port" "${RABBITMQ_START_TIMEOUT:-300}"; then
-    _fail "RabbitMQ did not open port $amqp_port within ${RABBITMQ_START_TIMEOUT:-300} s" "$dir/rabbitmq.log"
+  if ! _wait_port "$amqp_port" "${RABBITMQ_START_TIMEOUT:-300}" "$dir/rabbitmq.pid"; then
+    _fail "RabbitMQ did not open port $amqp_port (exited, or not up within ${RABBITMQ_START_TIMEOUT:-300} s)" "$dir/rabbitmq.log"
     return 1
   fi
   export REDIS_ADDR="localhost:$redis_port"
