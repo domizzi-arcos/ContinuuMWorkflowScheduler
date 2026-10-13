@@ -7,7 +7,9 @@
 //	go run ./cmd/audit -configs <grid>/_configs -workflows 16 -out results/audit_<ts>.csv [-grid <dir>[,<dir>...]]
 //
 // Outputs <out> (one row per combo), <out stem>_templates.csv (one row per
-// combo × template) and, with -grid, <out stem>_join.csv (one row per run).
+// combo × template), <out stem>_workflows.csv (one row per combo × replayed
+// workflow, with its critical path for SLO deadlines) and, with -grid,
+// <out stem>_join.csv (one row per run).
 package main
 
 import (
@@ -40,8 +42,9 @@ func main() {
 }
 
 // comboRe extracts topology, capacity and seed from a grid combo ID such as
-// topo_edge_heavy_cap_small_seed3 or topo_uniform_m_cap_large_w_cost_seed1.
-var comboRe = regexp.MustCompile(`^topo_(.+?)_cap_(small|medium|large)(?:_w_[a-z]+)?(?:_seed(\d+))?$`)
+// topo_edge_heavy_cap_small_seed3, topo_uniform_m_cap_large_w_cost_seed1 or
+// topo_fog_heavy_cap_medium_sp_tier_seed2_iv500.
+var comboRe = regexp.MustCompile(`^topo_(.+?)_cap_(small|medium|large)(?:_w_[a-z0-9]+)?(?:_sp_[a-z0-9]+)?(?:_seed(\d+))?(?:_iv\d+)?$`)
 
 var tiers = []string{"EDGE", "FOG", "CLOUD"}
 
@@ -101,7 +104,10 @@ func run(args []string) error {
 	if err := writeTemplates(stem+"_templates.csv", combos); err != nil {
 		return err
 	}
-	fmt.Printf("wrote %s and %s_templates.csv (%d combos)\n", *out, stem, len(combos))
+	if err := writeWorkflows(stem+"_workflows.csv", combos, *nWorkflows); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s, %s_templates.csv and %s_workflows.csv (%d combos)\n", *out, stem, stem, len(combos))
 	printBreakdown(combos, *nWorkflows)
 
 	if *grids != "" {
@@ -148,7 +154,7 @@ func loadCombo(path string, drain time.Duration, cache map[string][]*models.Task
 		tasks:   tasks,
 		feas:    make(map[string]audit.TaskFeasibility, len(tasks)),
 		timing: audit.Timing{
-			Interval: generator.SubmissionInterval(),
+			Interval: generator.SubmissionInterval(cfg.Generator),
 			Window:   time.Duration(cfg.Experiment.DurationSeconds) * time.Second,
 			Drain:    drain,
 		},
@@ -284,6 +290,39 @@ func writeTemplates(path string, combos []*combo) error {
 			}
 			rows = append(rows, []string{c.id, t.ID, t.TargetTier, itoa(t.CPU), itoa(t.Memory), itoa(t.Disk), itoa(t.Duration),
 				strconv.FormatBool(f.Schedulable), strings.Join(f.Exceeds, "+"), minEff})
+		}
+	}
+	return writeCSV(path, header, rows)
+}
+
+// generated is an upper bound on the workflows a run of c creates: one at
+// the start and one per full interval of the generation window (the last
+// one can miss the window's end).
+func (c *combo) generated() int {
+	iv := c.timing.Interval.Milliseconds()
+	if iv <= 0 {
+		return 0
+	}
+	return int(c.timing.Window.Milliseconds()/iv) + 1
+}
+
+// writeWorkflows writes one row per replayed workflow: at least n per combo,
+// and every workflow its run can create, so all exported seqs have a row.
+func writeWorkflows(path string, combos []*combo, n int) error {
+	header := []string{"combo", "seq", "template", "critical_path_ms", "earliest_finish_ms", "has_unschedulable"}
+	var rows [][]string
+	for _, c := range combos {
+		verdicts, err := c.replay(max(n, c.generated()))
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.id, err)
+		}
+		for _, v := range verdicts {
+			cp, ef := "", ""
+			if !math.IsInf(v.CriticalPathMS, 1) {
+				cp = strconv.FormatFloat(v.CriticalPathMS, 'f', 0, 64)
+				ef = strconv.FormatFloat(v.EarliestFinishMS, 'f', 0, 64)
+			}
+			rows = append(rows, []string{c.id, itoa(v.Seq), v.Template, cp, ef, strconv.FormatBool(v.HasUnschedulable)})
 		}
 	}
 	return writeCSV(path, header, rows)

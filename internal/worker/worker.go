@@ -1,6 +1,6 @@
 // Package worker simulates task execution. Three consumer goroutines — one
 // per tier queue (edge, fog, cloud) — pull TaskMessages from RabbitMQ, mark
-// each execution RUNNING in Redis, sleep for `task.Duration + server.Latency`
+// each execution RUNNING in Redis, sleep for `server.ExecMS(task.Duration)`
 // to mimic real work, then mark it DONE and emit a ResultMessage on
 // result_exchange. A semaphore caps concurrent in-flight tasks per worker so
 // the broker's prefetch limit and the worker pool stay aligned.
@@ -162,7 +162,7 @@ func (w *Worker) consumeTier(queueName, consumerTag string, done <-chan struct{}
 // execute simulates one task end-to-end:
 //  1. decode the TaskMessage and fetch Task/Server/Execution from Redis,
 //  2. mark the execution RUNNING,
-//  3. sleep for task.Duration + server.Latency (pause-aware),
+//  3. sleep for server.ExecMS(task.Duration) (pause-aware),
 //  4. mark the execution DONE and release the reserved server resources,
 //  5. publish a ResultMessage carrying cost, energy, and dataflow trace.
 //
@@ -216,7 +216,7 @@ func (w *Worker) execute(body []byte, done <-chan struct{}) error {
 		return fmt.Errorf("mark running: %w", err)
 	}
 
-	effectiveDuration := time.Duration(task.Duration+srv.Latency) * time.Millisecond
+	effectiveDuration := time.Duration(srv.ExecMS(task.Duration)) * time.Millisecond
 	slog.Debug("task running", "component", "worker",
 		"tier", srv.Type, "execution_id", execution.ID, "task_id", task.ID,
 		"task_name", task.Name, "server_id", srv.ID, "duration", effectiveDuration,

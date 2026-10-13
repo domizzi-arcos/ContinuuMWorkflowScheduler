@@ -99,6 +99,7 @@ func startSimulationSession(s *store.RedisStore, cfg *config.Config, pauseCtrl *
 	algo := scheduler.NewAlgorithm(cfg.Scheduler.Algorithm, cfg.Scheduler.Seed, tw.Time, tw.Cost, tw.Energy, tw.Util)
 	sched := scheduler.New(s, b, algo, session.executionIDs, pauseCtrl)
 	gen := generator.New(s, tasks, session.executionIDs, pauseCtrl, cfg.Generator.WorkflowSeed, cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
+	gen.SetInterval(generator.SubmissionInterval(cfg.Generator))
 	session.worker = worker.New(s, b, cfg.Scheduler.Algorithm, pauseCtrl)
 	col := results.New(s, b, pauseCtrl, session.doneExecIDs)
 	tracker := workflow.NewTracker(s, session.doneExecIDs, session.executionIDs, pauseCtrl)

@@ -85,8 +85,19 @@ ALGORITHMS = algorithms.NAMES
 DRAIN_S = 180
 RUN_OVERHEAD_S = 3
 
-# Gap between workflow submissions (generator.workflowSubmissionInterval).
+# Default gap between workflow submissions (generator.interval_ms; v1 and C3).
+# --interval-ms changes it (load axis); combo IDs then gain _iv<ms>.
 WORKFLOW_INTERVAL_MS = 2000
+
+# Per-server processing-speed presets (servers.speed; speed axis). "none"
+# writes nothing, so execution time is the trace duration as in C3.
+#   tier : edge 2× slower, cloud 2× faster than fog;
+#   cores: speed = (cpu / 4)^0.5, so 1 core 0.5×, 4 cores 1×, 16 cores 2×.
+SPEED_PRESETS = {
+    "none":  None,
+    "tier":  {"edge": 0.5, "fog": 1.0, "cloud": 2.0},
+    "cores": {"cores_ref": 4, "cores_exponent": 0.5},
+}
 
 # Eight topologies cover three regimes:
 #   - uniform_{s,m,l}: equal server counts per tier at increasing scale
@@ -212,6 +223,24 @@ TOPSIS_WEIGHT_VARIANTS = [
     {"label": "energy", "time": 0.15, "cost": 0.15, "energy": 0.70, "util": 0.0},
 ]
 
+# Weight sweep for the Pareto study (--weight-sweep). Each variant runs every
+# policy in --weight-algorithms (default topsis, weighted_sum, which share the
+# weights). The utilisation ladder keeps the default 0.4/0.3/0.3; u25 is the
+# C3 default and doubles as a replication check. Labels are [a-z0-9]+ (combo
+# IDs and the analysis parser depend on it) and distinct from the variants
+# above, whose values differ.
+WEIGHT_SWEEP = [
+    {"label": "u0",        "time": 0.40, "cost": 0.30, "energy": 0.30, "util": 0.0},
+    {"label": "u10",       "time": 0.40, "cost": 0.30, "energy": 0.30, "util": 0.10},
+    {"label": "u25",       "time": 0.40, "cost": 0.30, "energy": 0.30, "util": 0.25},
+    {"label": "u50",       "time": 0.40, "cost": 0.30, "energy": 0.30, "util": 0.50},
+    {"label": "time80",    "time": 0.80, "cost": 0.10, "energy": 0.10, "util": 0.0},
+    {"label": "time80u25", "time": 0.80, "cost": 0.10, "energy": 0.10, "util": 0.25},
+    {"label": "cost80",    "time": 0.10, "cost": 0.80, "energy": 0.10, "util": 0.0},
+    {"label": "energy80",  "time": 0.10, "cost": 0.10, "energy": 0.80, "util": 0.0},
+]
+WEIGHT_SWEEP_ALGORITHMS = ["topsis", "weighted_sum"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -289,7 +318,9 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
                 algorithm: str | None = None,
                 seed: int | None = None,
                 cap_name: str | None = None,
-                workload: dict | None = None) -> dict:
+                workload: dict | None = None,
+                interval_ms: int = WORKFLOW_INTERVAL_MS,
+                speed: str = "none") -> dict:
     """Produce a per-combo config by mutating a deep copy of the base.
 
     The base config is treated as immutable; this function is the single
@@ -315,6 +346,9 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
         workload: Optional workload options: ``demand_scale`` (bool),
             ``max_duration_ms`` (int, 0 = off), ``drop_unschedulable``
             (bool). All off reproduces the v1 workload.
+        interval_ms: Gap between workflow submissions (generator.interval_ms).
+            Written only when it differs from the default.
+        speed: Key of ``SPEED_PRESETS``; "none" writes nothing.
 
     Returns:
         A fresh dict ready to be YAML-dumped as a per-combo config file.
@@ -368,8 +402,13 @@ def make_config(base: dict, topo: dict, cap: dict, duration: int,
     # so a JSON file identifies its combo without relying on its path.
     labels = {
         "topology":    topo["label"],
-        "interval_ms": str(WORKFLOW_INTERVAL_MS),
+        "interval_ms": str(interval_ms),
     }
+    if interval_ms != WORKFLOW_INTERVAL_MS:
+        cfg["generator"]["interval_ms"] = int(interval_ms)
+    if SPEED_PRESETS[speed] is not None:
+        cfg["servers"]["speed"] = dict(SPEED_PRESETS[speed])
+        labels["speed"] = speed
     if cap_name is not None:
         labels["capacity"] = cap_name
     if seed is not None:
@@ -550,7 +589,51 @@ def load_progress(progress_path: str) -> set:
 # Combination generation
 # ---------------------------------------------------------------------------
 
-def generate_main_grid(grid_dir: str, seeds: list[int] | None = None) -> list:
+def combo_name(topo_label: str, cap_name: str, seed: int | None, weights: str | None = None,
+               speed: str = "none", interval_ms: int = WORKFLOW_INTERVAL_MS) -> tuple[str, str]:
+    """Return (combo_id, base_combo_id) for one grid cell.
+
+    Format: topo_<t>_cap_<c>[_w_<weights>][_sp_<speed>][_seed<N>][_iv<ms>].
+    Default speed and interval add nothing, so C3 IDs are unchanged.
+    """
+    base = f"topo_{topo_label}_cap_{cap_name}"
+    if weights:
+        base += f"_w_{weights}"
+    if speed != "none":
+        base += f"_sp_{speed}"
+    iv = "" if interval_ms == WORKFLOW_INTERVAL_MS else f"_iv{interval_ms}"
+    combo_id = base + ("" if seed is None else f"_seed{seed}") + iv
+    return combo_id, base + iv
+
+
+def generate_weight_sweep(grid_dir: str, seeds: list[int] | None = None, speed: str = "none",
+                          interval_ms: int = WORKFLOW_INTERVAL_MS,
+                          algorithms_list: list[str] | None = None) -> list:
+    """Enumerate the Pareto weight sweep: one binary call per (topology,
+    capacity, ``WEIGHT_SWEEP`` variant[, seed]), each running every policy in
+    ``algorithms_list`` (default ``WEIGHT_SWEEP_ALGORITHMS``)."""
+    combos = []
+    for topo in TOPOLOGIES:
+        for cap_name in CAPACITY_PROFILES:
+            for w in WEIGHT_SWEEP:
+                for seed in (seeds or [None]):
+                    combo_id, base_id = combo_name(topo["label"], cap_name, seed, w["label"], speed, interval_ms)
+                    combos.append({
+                        "combo_id":       combo_id,
+                        "base_combo_id":  base_id,
+                        "topology":       topo,
+                        "capacity_name":  cap_name,
+                        "topsis_weights": w,
+                        "algorithm":      None,
+                        "algorithms":     list(algorithms_list or WEIGHT_SWEEP_ALGORITHMS),
+                        "seed":           seed,
+                        "output_dir":     os.path.join(grid_dir, combo_id),
+                    })
+    return combos
+
+
+def generate_main_grid(grid_dir: str, seeds: list[int] | None = None, speed: str = "none",
+                       interval_ms: int = WORKFLOW_INTERVAL_MS) -> list:
     """Enumerate the main (topology × capacity[, seed]) combinations.
 
     Iteration order is topology → capacity → seed (outer→inner). This is
@@ -577,10 +660,9 @@ def generate_main_grid(grid_dir: str, seeds: list[int] | None = None) -> list:
     for topo in TOPOLOGIES:
         for cap_name in CAPACITY_PROFILES:
             for seed in seed_list:
-                base_id = f"topo_{topo['label']}_cap_{cap_name}"
                 # base_combo_id is the un-seeded identity used for cross-seed
                 # aggregation later; combo_id is the unique per-run id.
-                combo_id = base_id if seed is None else f"{base_id}_seed{seed}"
+                combo_id, base_id = combo_name(topo["label"], cap_name, seed, None, speed, interval_ms)
                 combos.append({
                     "combo_id":       combo_id,
                     "base_combo_id":  base_id,
@@ -677,6 +759,20 @@ def parse_args():
                         "without building or running anything (input for cmd/audit)")
     p.add_argument("--skip-topsis-weights",  action="store_true",
                    help="skip TOPSIS weight sensitivity runs")
+    p.add_argument("--skip-main-grid",       action="store_true",
+                   help="run no main-grid combos (only the weight passes)")
+    p.add_argument("--weight-sweep",         action="store_true",
+                   help="add the Pareto weight sweep (WEIGHT_SWEEP variants), running "
+                        "--weight-algorithms per variant")
+    p.add_argument("--weight-algorithms",    default=None,
+                   help="comma-separated policies for --weight-sweep "
+                        f"(default: {','.join(WEIGHT_SWEEP_ALGORITHMS)})")
+    p.add_argument("--interval-ms",          type=int, default=WORKFLOW_INTERVAL_MS,
+                   help=f"gap between workflow submissions in ms (default: {WORKFLOW_INTERVAL_MS}); "
+                        "other values add _iv<ms> to combo IDs")
+    p.add_argument("--speed",                default="none", choices=list(SPEED_PRESETS),
+                   help="per-server speed preset (default: none = trace durations); "
+                        "other values add _sp_<preset> to combo IDs")
     p.add_argument("--resume",               default=None, metavar="DIR",
                    help="resume interrupted run from existing grid output dir")
     p.add_argument("--binary",               default=None,
@@ -715,6 +811,11 @@ def main():
         return items
 
     sel_algos = csv_list(args.algorithms, algorithms.ALL, "algorithms")
+    weight_algos = csv_list(args.weight_algorithms, algorithms.ALL, "weight-algorithms") \
+        or WEIGHT_SWEEP_ALGORITHMS
+    if args.interval_ms <= 0:
+        print(f"Error: --interval-ms must be > 0, got {args.interval_ms}", file=sys.stderr)
+        sys.exit(1)
     sel_topos = csv_list(args.topologies, [t["label"] for t in TOPOLOGIES], "topologies")
     sel_caps  = csv_list(args.capacities, list(CAPACITY_PROFILES), "capacities")
     run_algos = sel_algos or ALGORITHMS
@@ -782,6 +883,17 @@ def main():
         "skip_topsis_weights": args.skip_topsis_weights,
         "workload":           workload,
     }
+    # Axes added after C3: recorded only when not at their default, so the
+    # --resume check still accepts grids written before they existed.
+    if args.interval_ms != WORKFLOW_INTERVAL_MS:
+        options["interval_ms"] = args.interval_ms
+    if args.speed != "none":
+        options["speed"] = args.speed
+    if args.skip_main_grid:
+        options["skip_main_grid"] = True
+    if args.weight_sweep:
+        options["weight_sweep"] = [w["label"] for w in WEIGHT_SWEEP]
+        options["weight_algorithms"] = weight_algos
     options_path = os.path.join(grid_dir, "grid_options.json")
     if args.resume and os.path.exists(options_path):
         with open(options_path) as f:
@@ -801,17 +913,26 @@ def main():
 
     # Materialise the full work list. --skip-topsis-weights drops the
     # 72-call sensitivity pass entirely; --topologies/--capacities filter both.
-    main_combos = [c for c in generate_main_grid(grid_dir, seeds) if selected(c)]
+    axes = {"speed": args.speed, "interval_ms": args.interval_ms}
+    main_combos = [] if args.skip_main_grid else \
+        [c for c in generate_main_grid(grid_dir, seeds, **axes) if selected(c)]
     sens_combos = [] if args.skip_topsis_weights else \
         [c for c in generate_topsis_sensitivity(grid_dir, seeds) if selected(c)]
-    all_combos = main_combos + sens_combos
+    sweep_combos = [c for c in generate_weight_sweep(grid_dir, seeds, algorithms_list=weight_algos, **axes)
+                    if selected(c)] if args.weight_sweep else []
+    if (args.speed != "none" or args.interval_ms != WORKFLOW_INTERVAL_MS) and sens_combos:
+        print("Error: --speed/--interval-ms apply to the main grid and --weight-sweep only; "
+              "add --skip-topsis-weights", file=sys.stderr)
+        sys.exit(1)
+    all_combos = main_combos + sens_combos + sweep_combos
 
     n_main        = len(main_combos)
     n_sensitivity = len(sens_combos)
+    n_sweep       = len(sweep_combos)
     n_total       = len(all_combos)
     # Main-grid binary calls expand to one run per selected policy;
     # sensitivity calls are 1:1. Runs are assumed roughly equal length.
-    est_algo_runs = n_main * len(run_algos) + n_sensitivity
+    est_algo_runs = n_main * len(run_algos) + n_sensitivity + n_sweep * len(weight_algos)
     # Each algo run is the generation window plus up to DRAIN_S of drain
     # plus ~RUN_OVERHEAD_S of reset/seed/export; v1 runs always hit the drain
     # deadline, so this is the realistic upper bound.
@@ -822,6 +943,9 @@ def main():
     print(f"  Main grid runs      : {n_main} binary calls × {len(run_algos)} algorithms = {n_main * len(run_algos)} algo runs")
     if not args.skip_topsis_weights:
         print(f"  TOPSIS sensitivity  : {n_sensitivity} binary calls × 1 algorithm = {n_sensitivity} algo runs")
+    if args.weight_sweep:
+        print(f"  Weight sweep        : {n_sweep} binary calls × {len(weight_algos)} algorithms = "
+              f"{n_sweep * len(weight_algos)} algo runs")
     print(f"  Total binary calls  : {n_total}")
     print(f"  Total algo executions: {est_algo_runs}")
     print(f"  Estimated runtime   : <= {est_hours:.1f}h at {per_run_s}s/run "
@@ -834,7 +958,7 @@ def main():
             cfg = make_config(base_cfg, c["topology"], CAPACITY_PROFILES[c["capacity_name"]],
                               args.duration, topsis_weights=c["topsis_weights"],
                               algorithm=c["algorithm"], seed=c.get("seed"),
-                              cap_name=c["capacity_name"], workload=workload)
+                              cap_name=c["capacity_name"], workload=workload, **axes)
             write_temp_config(cfg, os.path.join(configs_dir, f"{c['combo_id']}.yaml"))
         print(f"Wrote {len(all_combos)} configs to {configs_dir}")
         return
@@ -846,7 +970,7 @@ def main():
         print("DRY RUN — combinations that would execute:\n")
         for i, c in enumerate(all_combos, 1):
             topo = c["topology"]
-            algo = c["algorithm"] or f"{len(run_algos)} policies"
+            algo = c["algorithm"] or ",".join(c.get("algorithms") or []) or f"{len(run_algos)} policies"
             w    = c["topsis_weights"]["label"] if c["topsis_weights"] else "balanced"
             print(f"  {i:3d}. {c['combo_id']:<55} algo={algo:<10} weights={w}")
         return
@@ -901,7 +1025,7 @@ def main():
         cfg      = make_config(base_cfg, topo, cap, args.duration,
                                topsis_weights=weights, algorithm=algorithm,
                                seed=combo.get("seed"), cap_name=cap_name,
-                               workload=workload)
+                               workload=workload, **axes)
         write_temp_config(cfg, cfg_path)
 
         # The Go binary will write its JSON output here.
@@ -911,8 +1035,10 @@ def main():
         # Time the subprocess so the manifest records elapsed wall-time per
         # combo — useful for spotting outliers or scheduling cost regressions.
         t0      = time.time()
+        combo_algos = combo.get("algorithms")
         success = run_binary(binary, cfg_path, out_dir, args.duration, algorithm,
-                             algorithms_csv=algorithms_csv, drain=args.drain)
+                             algorithms_csv=",".join(combo_algos) if combo_algos else algorithms_csv,
+                             drain=args.drain)
         elapsed = time.time() - t0
 
         status = "done" if success else "failed"
@@ -921,7 +1047,7 @@ def main():
         # Per-combo comparison plots only make sense when multiple algorithms
         # ran in the same dir (i.e. the main grid). The TOPSIS-sensitivity
         # passes write a single-algorithm dir, so we skip plotting them here.
-        if success and algorithm is None:
+        if success and algorithm is None and not combo_algos:
             run_per_config_plots(out_dir)
 
         # Append a structured record for this combo. base_combo_id is the
@@ -937,7 +1063,7 @@ def main():
             "output_dir":     out_dir,
             "status":         status,
             "duration_s":     args.duration,
-            "algorithms":     [algorithm] if algorithm else run_algos,
+            "algorithms":     [algorithm] if algorithm else (combo_algos or run_algos),
             "elapsed_s":      round(elapsed, 1),
             "completed_at":   ts(),
         })

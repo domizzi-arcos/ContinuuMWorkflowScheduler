@@ -35,9 +35,12 @@ def write_run(grid, combo, algo, ts, cost=1.0, labels=None, seq=True, n_wf=3):
 
 def test_parse_combo():
     assert load.parse_combo("topo_edge_heavy_cap_small_seed3") == {
-        "topology": "edge_heavy", "capacity": "small", "weights": "balanced", "seed": 3, "interval_ms": 2000}
+        "topology": "edge_heavy", "capacity": "small", "weights": "balanced", "speed": "none", "seed": 3,
+        "interval_ms": 2000}
     assert load.parse_combo("topo_uniform_m_cap_large_w_cost_seed1_iv500")["interval_ms"] == 500
     assert load.parse_combo("topo_uniform_m_cap_large_w_cost_seed1_iv500")["weights"] == "cost"
+    sweep = load.parse_combo("topo_fog_heavy_cap_small_w_time80u25_sp_cores_seed2_iv250")
+    assert (sweep["weights"], sweep["speed"], sweep["seed"], sweep["interval_ms"]) == ("time80u25", "cores", 2, 250)
     assert load.parse_combo("topo_cloud_med_cap_medium")["seed"] is None
     assert load.parse_combo("benchmark_20260101") == {}
 

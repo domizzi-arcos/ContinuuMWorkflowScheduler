@@ -91,6 +91,9 @@ func TestJudgeWorkflow(t *testing.T) {
 	if want := 2000.0 + 1005 + 100005 + 1005; v.EarliestFinishMS != want || v.Infeasible() {
 		t.Errorf("parallel branch: EF = %v (want %v), infeasible = %v", v.EarliestFinishMS, want, v.Infeasible())
 	}
+	if want := 1005.0 + 100005 + 1005; v.CriticalPathMS != want {
+		t.Errorf("parallel branch: critical path = %v, want %v", v.CriticalPathMS, want)
+	}
 
 	// Two long tasks in series exceed 210 s.
 	v = JudgeWorkflow(mk(0, long, long, short, short, long), feas, timing)
@@ -109,5 +112,18 @@ func TestJudgeWorkflow(t *testing.T) {
 	v = JudgeWorkflow(mk(0, short, huge, short, short, short), feas, timing)
 	if !v.HasUnschedulable || v.TimeInfeasible || !math.IsInf(v.EarliestFinishMS, 1) {
 		t.Errorf("unschedulable slot: %+v", v)
+	}
+}
+
+// TestClassifyUsesServerSpeed checks that the fastest feasible server is
+// judged by duration/speed + latency, not duration + latency.
+func TestClassifyUsesServerSpeed(t *testing.T) {
+	slow := srv("e", 2, 768, 20, 5)
+	slow.Speed = 0.5
+	fast := srv("c", 32, 65536, 1600, 100)
+	fast.Speed = 2
+	f := Classify(task("t", 1, 128, 0, 1000), []*models.Server{slow, fast})
+	if want := 600.0; f.MinEffectiveMS != want { // c: 1000/2 + 100; e: 2000 + 5
+		t.Errorf("MinEffectiveMS = %v, want %v", f.MinEffectiveMS, want)
 	}
 }

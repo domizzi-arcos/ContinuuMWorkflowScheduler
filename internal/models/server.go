@@ -1,5 +1,7 @@
 package models
 
+import "math"
+
 // Server represents an Edge, Fog, or Cloud node with its static capacity,
 // live resource usage counters, and per-tier cost/energy parameters.
 // Servers are stored in Redis under server:<id> and mutated under
@@ -27,9 +29,12 @@ type Server struct {
 	CostPerHour float64 `json:"cost_per_hour"`
 	// PowerWatts is the average draw used to estimate per-task EnergyWh
 	// (idle + active blended into a single representative number).
-	PowerWatts     int `json:"power_watts"`
-	ActiveTasks    int `json:"active_tasks"`
-	CompletedTasks int `json:"completed_tasks"`
+	PowerWatts int `json:"power_watts"`
+	// Speed scales execution time: a task of trace duration d runs for
+	// round(d/Speed) ms here. 0 (omitted, as in v1 and C3 data) means 1.
+	Speed          float64 `json:"speed,omitempty"`
+	ActiveTasks    int     `json:"active_tasks"`
+	CompletedTasks int     `json:"completed_tasks"`
 }
 
 // HasCapacity reports whether the server can host an additional task that
@@ -44,6 +49,16 @@ func (s *Server) HasCapacity(cpu, memory, disk int) bool {
 // scheduling algorithms can use to bias placement. Memory is scaled by 1/100
 // so it does not dominate the sum; higher means more free, lower means more
 // packed.
+// ExecMS is the effective wall time in ms of a task of trace duration
+// durationMS on this server: round(durationMS/Speed) + Latency. Workers sleep
+// for it and every policy estimates time, cost and energy from it.
+func (s *Server) ExecMS(durationMS int) int {
+	if s.Speed <= 0 || s.Speed == 1 {
+		return durationMS + s.Latency
+	}
+	return int(math.Round(float64(durationMS)/s.Speed)) + s.Latency
+}
+
 // FitsWhenIdle reports whether the server could hold a task with these
 // demands if it were idle, i.e. ignoring current usage.
 func (s *Server) FitsWhenIdle(cpu, memory, disk int) bool {

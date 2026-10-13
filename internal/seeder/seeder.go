@@ -28,6 +28,7 @@ type tierSeedConfig struct {
 	latency     config.IntRange
 	costPerHour float64
 	power       config.IntRange
+	speed       config.SpeedConfig
 }
 
 // serverProfile is one sampled point in the (cpu, memory, disk, latency, power)
@@ -84,6 +85,7 @@ func buildServers(cfg *config.Config) ([]*models.Server, int64, error) {
 			latency:     cfg.Servers.Edge.WANLatency,
 			costPerHour: cfg.Servers.Edge.CostPerHour,
 			power:       cfg.Servers.Edge.PowerWatts,
+			speed:       cfg.Servers.Speed,
 		},
 		{
 			name:        "fog",
@@ -95,6 +97,7 @@ func buildServers(cfg *config.Config) ([]*models.Server, int64, error) {
 			latency:     cfg.Servers.Fog.WANLatency,
 			costPerHour: cfg.Servers.Fog.CostPerHour,
 			power:       cfg.Servers.Fog.PowerWatts,
+			speed:       cfg.Servers.Speed,
 		},
 		{
 			name:        "cloud",
@@ -106,6 +109,7 @@ func buildServers(cfg *config.Config) ([]*models.Server, int64, error) {
 			latency:     cfg.Servers.Cloud.WANLatency,
 			costPerHour: cfg.Servers.Cloud.CostPerHour,
 			power:       cfg.Servers.Cloud.PowerWatts,
+			speed:       cfg.Servers.Speed,
 		},
 	}
 
@@ -163,6 +167,11 @@ func buildTierServers(tier tierSeedConfig, rng *rand.Rand) ([]*models.Server, er
 			CostPerHour: tier.costPerHour,
 			PowerWatts:  profile.power,
 		})
+		// Speed is derived, not sampled, so the RNG stream (and every fleet
+		// of earlier campaigns) is unchanged. Speed 1 is stored as 0.
+		if sp := tier.speed.ServerSpeed(tier.nodeType, profile.cpu); sp != 1 {
+			servers[len(servers)-1].Speed = sp
+		}
 	}
 	return servers, nil
 }

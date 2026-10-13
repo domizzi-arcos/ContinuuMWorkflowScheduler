@@ -88,3 +88,25 @@ func TestValidateWorkloadOptions(t *testing.T) {
 		}
 	}
 }
+
+// TestSpeedConfig pins the speed model: tier factors (0 means 1), optionally
+// scaled by (cpu / cores_ref)^cores_exponent.
+func TestSpeedConfig(t *testing.T) {
+	var none SpeedConfig
+	if got := none.ServerSpeed("EDGE", 2); got != 1 {
+		t.Errorf("default speed = %v, want 1", got)
+	}
+	tier := SpeedConfig{Edge: 0.5, Cloud: 2}
+	for typ, want := range map[string]float64{"EDGE": 0.5, "FOG": 1, "CLOUD": 2} {
+		if got := tier.ServerSpeed(typ, 8); got != want {
+			t.Errorf("tier speed %s = %v, want %v", typ, got, want)
+		}
+	}
+	cores := SpeedConfig{CoresRef: 4, CoresExponent: 0.5}
+	if got := cores.ServerSpeed("CLOUD", 16); got != 2 {
+		t.Errorf("cores speed for 16 cores = %v, want 2", got)
+	}
+	if got := cores.ServerSpeed("EDGE", 1); got != 0.5 {
+		t.Errorf("cores speed for 1 core = %v, want 0.5", got)
+	}
+}

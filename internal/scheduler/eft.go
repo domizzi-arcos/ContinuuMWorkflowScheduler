@@ -7,9 +7,9 @@ import "github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 // tasks arrive online, so HEFT's upward-rank ordering phase does not apply.
 //
 // Over the feasible candidates it picks the server minimising the estimated
-// finish time d+ℓ (task duration + server latency, ms). Because a feasible
-// server starts the task immediately and d is the same on every server, this
-// is the lowest-latency server. Ties (within tieTolerance) are broken by
+// finish time d/s+ℓ (task duration over server speed, plus server latency,
+// ms). A feasible server starts the task immediately, so with all speeds 1
+// (the default) this is the lowest-latency server. Ties (within tieTolerance) are broken by
 // lower post-placement utilisation (worst of CPU, memory, disk), then lower
 // server ID. The candidate slice is not modified.
 type EFT struct{}

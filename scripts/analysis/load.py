@@ -28,15 +28,19 @@ import warnings
 
 import pandas as pd
 
-# topo_<topology>_cap_<capacity>[_w_<weights>][_seed<N>][_iv<ms>]
+# topo_<topology>_cap_<capacity>[_w_<weights>][_sp_<speed>][_seed<N>][_iv<ms>]
 COMBO_RE = re.compile(
     r"^topo_(?P<topology>.+?)_cap_(?P<capacity>small|medium|large)"
-    r"(?:_w_(?P<weights>[a-z]+))?(?:_seed(?P<seed>\d+))?(?:_iv(?P<interval_ms>\d+))?$"
+    r"(?:_w_(?P<weights>[a-z0-9]+))?(?:_sp_(?P<speed>[a-z0-9]+))?"
+    r"(?:_seed(?P<seed>\d+))?(?:_iv(?P<interval_ms>\d+))?$"
 )
 
 DEFAULT_INTERVAL_MS = 2000
+DEFAULT_SPEED = "none"
+DEFAULT_WINDOW_S = 30
 TIERS = ["EDGE", "FOG", "CLOUD"]
-RUN_KEYS = ["grid", "combo", "topology", "capacity", "seed", "interval_ms", "weights", "algorithm"]
+RUN_KEYS = ["grid", "combo", "topology", "capacity", "seed", "interval_ms", "window_s", "speed",
+            "weights", "algorithm"]
 
 
 def parse_combo(combo: str) -> dict:
@@ -52,6 +56,7 @@ def parse_combo(combo: str) -> dict:
         "topology": d["topology"],
         "capacity": d["capacity"],
         "weights": d["weights"] or "balanced",
+        "speed": d["speed"] or DEFAULT_SPEED,
         "seed": int(d["seed"]) if d["seed"] else None,
         "interval_ms": int(d["interval_ms"]) if d["interval_ms"] else DEFAULT_INTERVAL_MS,
     }
@@ -64,11 +69,13 @@ def run_identity(grid: str, combo: str, meta: dict) -> dict | None:
     if not ident and not labels:
         return None
     for key, cast in (("topology", str), ("capacity", str), ("weights", str),
-                      ("seed", int), ("interval_ms", int)):
+                      ("speed", str), ("seed", int), ("interval_ms", int)):
         if key in labels:
             ident[key] = cast(labels[key])
     ident.setdefault("weights", "balanced")
+    ident.setdefault("speed", DEFAULT_SPEED)
     ident.setdefault("interval_ms", DEFAULT_INTERVAL_MS)
+    ident["window_s"] = int(meta.get("duration_seconds") or DEFAULT_WINDOW_S)
     ident.setdefault("seed", None)
     ident.update(grid=os.path.basename(os.path.normpath(grid)), combo=combo,
                  algorithm=meta.get("algorithm"))

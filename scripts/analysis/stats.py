@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sps
 
-CONFIG = ["topology", "capacity", "interval_ms", "weights"]
+CONFIG = ["topology", "capacity", "interval_ms", "window_s", "speed", "weights"]
 METRICS = {
     "cost": "total_cost_usd",
     "energy": "total_energy_wh",

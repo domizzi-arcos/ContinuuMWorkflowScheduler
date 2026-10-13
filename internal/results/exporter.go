@@ -117,6 +117,8 @@ type ServerSnapshot struct {
 	Latency     int     `json:"latency"`
 	CostPerHour float64 `json:"cost_per_hour"`
 	PowerWatts  int     `json:"power_watts"`
+	// Speed is set only when it differs from 1 (servers.speed).
+	Speed float64 `json:"speed,omitempty"`
 }
 
 // RunInfo carries run-level metadata from the runner into the exported file.
@@ -173,6 +175,7 @@ func ExportRun(s *store.RedisStore, cfg *config.Config, wallDuration time.Durati
 			Latency:        srv.Latency,
 			CostPerHour:    srv.CostPerHour,
 			PowerWatts:     srv.PowerWatts,
+			Speed:          srv.Speed,
 		})
 	}
 

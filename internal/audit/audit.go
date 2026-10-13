@@ -35,8 +35,8 @@ type TaskFeasibility struct {
 	// resource over all servers. An unschedulable task with an empty Exceeds
 	// fails only jointly: each resource fits somewhere, never all on one node.
 	Exceeds []string
-	// MinEffectiveMS is the smallest duration+latency over servers that fit
-	// the task; +Inf when none does.
+	// MinEffectiveMS is the smallest effective time (Server.ExecMS) over
+	// servers that fit the task; +Inf when none does.
 	MinEffectiveMS float64
 }
 
@@ -50,7 +50,7 @@ func Classify(task *models.Task, servers []*models.Server) TaskFeasibility {
 		maxDisk = max(maxDisk, s.MaxDisk)
 		if s.FitsWhenIdle(task.CPU, task.Memory, task.Disk) {
 			f.Schedulable = true
-			f.MinEffectiveMS = math.Min(f.MinEffectiveMS, float64(task.Duration+s.Latency))
+			f.MinEffectiveMS = math.Min(f.MinEffectiveMS, float64(s.ExecMS(task.Duration)))
 		}
 	}
 	if task.CPU > maxCPU {
@@ -87,6 +87,11 @@ type WorkflowVerdict struct {
 	// start: submission time plus the critical path of minimum effective
 	// durations. +Inf when HasUnschedulable.
 	EarliestFinishMS float64
+	// CriticalPathMS is the longest path through the workflow DAG with each
+	// task at its MinEffectiveMS: the makespan the workflow would have alone
+	// on an idle system. The SLO deadline is a multiple of it. +Inf when
+	// HasUnschedulable.
+	CriticalPathMS float64
 	// TimeInfeasible is true when the workflow is schedulable but
 	// EarliestFinishMS exceeds the deadline.
 	TimeInfeasible bool
@@ -117,6 +122,7 @@ func JudgeWorkflow(draw generator.WorkflowDraw, feas map[string]TaskFeasibility,
 	for _, ef := range finish {
 		last = math.Max(last, ef)
 	}
+	v.CriticalPathMS = last
 	v.EarliestFinishMS = float64(draw.Seq)*float64(t.Interval.Milliseconds()) + last
 	v.TimeInfeasible = !v.HasUnschedulable && v.EarliestFinishMS > float64(t.Deadline().Milliseconds())
 	return v

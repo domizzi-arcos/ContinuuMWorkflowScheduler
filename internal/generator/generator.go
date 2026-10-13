@@ -6,17 +6,25 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/pcturnes/distributed-workflow-scheduler/internal/config"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/control"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/models"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/store"
 	"github.com/pcturnes/distributed-workflow-scheduler/internal/workflow"
 )
 
-const workflowSubmissionInterval = 2 * time.Second
+// defaultSubmissionInterval is the v1 and C3 gap between workflow submissions.
+const defaultSubmissionInterval = 2 * time.Second
 
-// SubmissionInterval is the fixed gap between workflow submissions; workflow
-// k of a run is created k intervals after generation starts.
-func SubmissionInterval() time.Duration { return workflowSubmissionInterval }
+// SubmissionInterval is the gap between workflow submissions for cfg
+// (generator.interval_ms, default 2 s); workflow k of a run is created k
+// intervals after generation starts.
+func SubmissionInterval(cfg config.GeneratorConfig) time.Duration {
+	if cfg.IntervalMS <= 0 {
+		return defaultSubmissionInterval
+	}
+	return time.Duration(cfg.IntervalMS) * time.Millisecond
+}
 
 // Generator instantiates workflow instances from the three templates at a
 // fixed rate and streams the entry execution IDs to the scheduler channel.
@@ -30,6 +38,7 @@ type Generator struct {
 	rng         *rand.Rand
 	output      chan<- string
 	control     *control.Controller
+	interval    time.Duration
 }
 
 // New builds a Generator from the full task catalog returned by SeedTasks.
@@ -56,13 +65,22 @@ func New(
 		rng:         rand.New(rand.NewSource(seed)),
 		output:      output,
 		control:     ctrl,
+		interval:    defaultSubmissionInterval,
+	}
+}
+
+// SetInterval sets the gap between workflow submissions (see
+// SubmissionInterval). Call it before Start; d <= 0 is ignored.
+func (g *Generator) SetInterval(d time.Duration) {
+	if d > 0 {
+		g.interval = d
 	}
 }
 
 // Start instantiates workflow instances in a round-robin loop until stopped.
 func (g *Generator) Start(done <-chan struct{}) {
 	slog.Info("generator started", "component", "generator",
-		"templates", len(g.templates), "tasks", len(g.tasks), "interval", workflowSubmissionInterval)
+		"templates", len(g.templates), "tasks", len(g.tasks), "interval", g.interval)
 
 	created := 0
 	for {
@@ -77,7 +95,7 @@ func (g *Generator) Start(done <-chan struct{}) {
 			created++
 		}
 
-		if !g.sleep(done, workflowSubmissionInterval) {
+		if !g.sleep(done, g.interval) {
 			slog.Info("generator stopped", "component", "generator", "workflows_created", created)
 			return
 		}

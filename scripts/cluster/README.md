@@ -102,3 +102,86 @@ make analysis GRID_DIRS="$(ls -d results/c3_cluster/task_*)"
   and raise `RABBITMQ_START_TIMEOUT` (default 300 s) if the images live on a
   slow shared filesystem. Set `TMPDIR` to node-local disk if it points at
   Lustre or NFS.
+
+## Post-C3 experiments (pareto, load, speed) and the SLO metric
+
+| File | Purpose |
+|---|---|
+| `experiments.py` | catalogue: experiment → levels → (grid flags, time limit); array index → job |
+| `exp_array.sbatch` | one array task = one (level, topology, capacity, seed) via `run_combo.sh` |
+| `submit.sh` | sets the array range and time limit from the catalogue and submits |
+
+```sh
+scripts/cluster/submit.sh list
+```
+
+| Experiment | Levels | What changes (grid flags) | Jobs × runs |
+|---|---|---|---|
+| `pareto` | `sweep` | `--weight-sweep --skip-main-grid`: 8 weight vectors (`WEIGHT_SWEEP`: u0, u10, u25, u50, time80, time80u25, cost80, energy80) × {topsis, weighted_sum} | 120 × 16 |
+| `load` | `iv1000`, `iv500`, `iv250`, `win120` | workflow interval 1 s / 0.5 s / 0.25 s (C3 is 2 s), or 2 s over a 120 s window; drain 300–600 s | 4 × 120 × 10 |
+| `speed` | `tier`, `cores` | `--speed tier` (edge 0.5×, fog 1×, cloud 2×) or `--speed cores` (speed = (cpu/4)^0.5) | 2 × 120 × 10 |
+
+Results land in `results/<experiment>/<level>/task_<combo>/` (combo IDs gain
+`_w_<weights>`, `_sp_<speed>` or `_iv<ms>`; the analysis reads these and
+`meta.labels`). Every new option defaults to off: a config without them is
+byte-identical to C3's and the Go golden tests are unchanged, so C3 remains
+the 2 s / speed-1 / default-weights level of each experiment.
+
+**1. Rebuild the binary** (the speed, interval and critical-path code is new)
+from a committed tree and copy it to the cluster:
+
+```sh
+CGO_ENABLED=0 go build -o bin/benchmark ./cmd/benchmark
+```
+
+**2. Pilot one job per experiment** (index 0 = uniform_s / small / seed 1 of
+the first level) and check it drained and completed every workflow before
+submitting the arrays:
+
+```sh
+ARRAY=0 scripts/cluster/submit.sh pareto
+ARRAY=0 scripts/cluster/submit.sh load iv250      # heaviest load level
+ARRAY=0 scripts/cluster/submit.sh speed tier
+grep -h "drain finished" logs/wfsched-*_*_0.out   # drained=true expected
+```
+
+Use the pilot's wall time to adjust the time limits in `experiments.py`
+(C3: 6–18 min per 10-policy job; the pareto job runs 16 policies, the load
+levels carry 2–8× the workflows). A run that has not drained by its drain
+deadline is still exported, with `end_state.drained = false` and fewer
+completed workflows; at 0.25 s this is a result, not a failure.
+
+**3. Submit** (finished jobs are skipped on resubmission):
+
+```sh
+scripts/cluster/submit.sh pareto
+scripts/cluster/submit.sh load              # or one level: submit.sh load iv500
+scripts/cluster/submit.sh speed
+SEEDS=1,2,3 scripts/cluster/submit.sh load iv250   # fewer seeds if time is short
+```
+
+**4. Analyse** (from the repository root, with the analysis environment):
+
+```sh
+# Pareto: sweep + C3 (C3 supplies the weight-independent policies).
+python3 scripts/analysis/pareto.py results/pareto/sweep/task_* results/c3_cluster/task_* \
+  --out analysis_out/pareto
+#   -> pareto_points.csv, pareto_per_config.csv, replication.csv
+#      (topsis[u25] must match C3 topsis within noise), pareto.pdf
+
+# Load and speed: the usual pipeline, one level at a time or together with C3.
+make analysis GRID_DIRS="$(ls -d results/load/iv500/task_*)" ANALYSIS_OUT=analysis_out/load_iv500
+make analysis GRID_DIRS="$(ls -d results/speed/tier/task_*)" ANALYSIS_OUT=analysis_out/speed_tier
+
+# SLO / deadline metric: share of workflows done within k × critical path
+# (+ optional fixed slack). Works on any grid, including C3; needs Go.
+python3 scripts/analysis/slo.py results/c3_cluster/task_* results/load/*/task_* \
+  --k 1.5,2,3,5 --slack-ms 2000 --out analysis_out/slo_load
+```
+
+The critical path of a workflow is its longest DAG path with each task at its
+fastest feasible effective time (duration / speed + latency) on an idle
+system, recomputed by `cmd/audit` from each grid's `_configs/`. In C3, 42% of
+workflows have a critical path under 1 s while dispatch costs about 450 ms per
+DAG level, so a pure k × CP deadline is unreachable for them under any
+policy; `--slack-ms` (e.g. 2000) adds a fixed allowance.

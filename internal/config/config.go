@@ -100,6 +100,51 @@ type ServersConfig struct {
 	Edge  ServerTierConfig `yaml:"edge"`
 	Fog   ServerTierConfig `yaml:"fog"`
 	Cloud ServerTierConfig `yaml:"cloud"`
+	// Speed sets per-server processing speed (eval-v2 speed axis). Omitted,
+	// every server runs at speed 1 and execution time is the trace duration,
+	// as in v1 and C3.
+	Speed SpeedConfig `yaml:"speed"`
+}
+
+// SpeedConfig derives each server's processing speed s: a task of trace
+// duration d runs for round(d/s) ms on it (plus the server's latency).
+//
+//	s = tier factor × (cpu / CoresRef)^CoresExponent   when CoresRef > 0
+//	s = tier factor                                    otherwise
+//
+// A tier factor of 0 (omitted) means 1.
+type SpeedConfig struct {
+	Edge          float64 `yaml:"edge"`
+	Fog           float64 `yaml:"fog"`
+	Cloud         float64 `yaml:"cloud"`
+	CoresRef      int     `yaml:"cores_ref"`
+	CoresExponent float64 `yaml:"cores_exponent"`
+}
+
+// Factor returns the tier factor for a server type (EDGE, FOG or CLOUD).
+func (c SpeedConfig) Factor(serverType string) float64 {
+	var f float64
+	switch serverType {
+	case "EDGE":
+		f = c.Edge
+	case "FOG":
+		f = c.Fog
+	case "CLOUD":
+		f = c.Cloud
+	}
+	if f == 0 {
+		return 1
+	}
+	return f
+}
+
+// ServerSpeed returns the speed of a server of the given type and cores.
+func (c SpeedConfig) ServerSpeed(serverType string, cpu int) float64 {
+	s := c.Factor(serverType)
+	if c.CoresRef > 0 && cpu > 0 {
+		s *= math.Pow(float64(cpu)/float64(c.CoresRef), c.CoresExponent)
+	}
+	return s
 }
 
 // TOPSISWeights holds the per-criterion weights used by the TOPSIS scheduler.
@@ -150,6 +195,9 @@ type GeneratorConfig struct {
 	// is idle. This changes the workflow draws (identically for every
 	// policy of a seed).
 	DropUnschedulable bool `yaml:"drop_unschedulable"`
+	// IntervalMS is the gap between workflow submissions; 0 means 2000, the
+	// v1 and C3 value. The load axis lowers it.
+	IntervalMS int `yaml:"interval_ms"`
 }
 
 // DemandScale holds per-resource multipliers for one trace tier.
@@ -246,6 +294,17 @@ func (cfg *Config) Validate() error {
 			return fmt.Errorf("generator.demand_scale.%s: cpu, memory and disk factors must all be > 0, got %+v", tier, f)
 		}
 	}
+	if cfg.Generator.IntervalMS < 0 {
+		return fmt.Errorf("generator.interval_ms must be >= 0 (0 = 2000), got %d", cfg.Generator.IntervalMS)
+	}
+	for name, f := range map[string]float64{"edge": cfg.Servers.Speed.Edge, "fog": cfg.Servers.Speed.Fog, "cloud": cfg.Servers.Speed.Cloud} {
+		if f < 0 {
+			return fmt.Errorf("servers.speed.%s must be >= 0 (0 = 1), got %g", name, f)
+		}
+	}
+	if cfg.Servers.Speed.CoresRef < 0 {
+		return fmt.Errorf("servers.speed.cores_ref must be >= 0, got %d", cfg.Servers.Speed.CoresRef)
+	}
 	if cfg.Generator.MaxDurationMS < 0 {
 		return fmt.Errorf("generator.max_duration_ms must be >= 0, got %d", cfg.Generator.MaxDurationMS)
 	}
@@ -291,6 +350,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Generator.FogMaxDurationMS <= cfg.Generator.EdgeMaxDurationMS {
 		cfg.Generator.FogMaxDurationMS = cfg.Generator.EdgeMaxDurationMS + 2000
+	}
+	if cfg.Generator.IntervalMS == 0 {
+		cfg.Generator.IntervalMS = 2000
 	}
 	if cfg.Generator.PriorityMin <= 0 {
 		cfg.Generator.PriorityMin = 1

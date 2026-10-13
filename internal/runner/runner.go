@@ -102,6 +102,7 @@ func Run(s *store.RedisStore, cfg *config.Config, runDuration, drain time.Durati
 	algoImpl := scheduler.NewAlgorithm(cfg.Scheduler.Algorithm, cfg.Scheduler.Seed, tw.Time, tw.Cost, tw.Energy, tw.Util)
 	sched := scheduler.New(s, b, algoImpl, sess.execIDs, pauseCtrl)
 	gen := generator.New(s, tasks, sess.execIDs, pauseCtrl, cfg.Generator.WorkflowSeed, cfg.Generator.PriorityMin, cfg.Generator.PriorityMax)
+	gen.SetInterval(generator.SubmissionInterval(cfg.Generator))
 	w := worker.New(s, b, cfg.Scheduler.Algorithm, pauseCtrl)
 	col := results.New(s, b, pauseCtrl, sess.resultIDs)
 	tracker := workflow.NewTracker(s, sess.resultIDs, sess.execIDs, pauseCtrl)

@@ -10,9 +10,10 @@ import (
 // computeCriteria returns, for each server in sorted (same order), the four
 // "lower is better" criteria shared by TOPSIS and the greedy baselines:
 //
-//   - time:   effective wall time d+ℓ in ms (task duration + server latency);
-//   - cost:   price × (d+ℓ) / 3.6e6, in USD (price is per hour, d+ℓ in ms);
-//   - energy: power × (d+ℓ) / 3.6e6, in Wh;
+//   - time:   effective wall time d/s+ℓ in ms (task duration over server
+//     speed, plus server latency; see Server.ExecMS);
+//   - cost:   price × (d/s+ℓ) / 3.6e6, in USD (price is per hour);
+//   - energy: power × (d/s+ℓ) / 3.6e6, in Wh;
 //   - util:   worst post-placement fractional usage over CPU, memory, disk.
 //
 // Cost and energy are charged against the same effective time the worker
@@ -24,7 +25,7 @@ func computeCriteria(task *models.Task, sorted []*models.Server) (time, cost, en
 	energy = make([]float64, n)
 	util = make([]float64, n)
 	for i, srv := range sorted {
-		effectiveMS := task.Duration + srv.Latency
+		effectiveMS := srv.ExecMS(task.Duration)
 		effectiveSec := float64(effectiveMS) / 1000.0
 		time[i] = float64(effectiveMS)
 		cost[i] = srv.CostPerHour * effectiveSec / 3600.0

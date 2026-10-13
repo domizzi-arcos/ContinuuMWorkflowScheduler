@@ -42,3 +42,7 @@ globus dataset/*.csv
 
 # Python bytecode
 __pycache__/
+c3results/resultadosc3.zip
+c3results/c3_all_results.csv
+c3results/C3_RESULTS.md
+c3results/*
