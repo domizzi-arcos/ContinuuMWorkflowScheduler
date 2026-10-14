@@ -34,8 +34,11 @@ import grid_benchmark as g  # noqa: E402
 EXPERIMENTS: dict[str, dict[str, tuple[str, str | None, str]]] = {
     # 1. Pareto / weight sweep: 8 weight vectors × {topsis, weighted_sum}.
     #    The 8 weight-independent policies come from C3 (same configs).
+    #    sweep_tier repeats it under --speed tier, where cost and makespan
+    #    conflict; its weight-independent policies come from speed/tier.
     "pareto": {
         "sweep": ("--weight-sweep --skip-main-grid", None, "02:00:00"),
+        "sweep_tier": ("--weight-sweep --skip-main-grid --speed tier --drain 300", None, "03:00:00"),
     },
     # 2. Load sweep: C3 is the 2000 ms level. win120 keeps 2000 ms but runs a
     #    4× longer generation window (60 workflows, as iv500 has in 30 s).

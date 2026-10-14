@@ -117,7 +117,7 @@ scripts/cluster/submit.sh list
 
 | Experiment | Levels | What changes (grid flags) | Jobs × runs |
 |---|---|---|---|
-| `pareto` | `sweep` | `--weight-sweep --skip-main-grid`: 8 weight vectors (`WEIGHT_SWEEP`: u0, u10, u25, u50, time80, time80u25, cost80, energy80) × {topsis, weighted_sum} | 120 × 16 |
+| `pareto` | `sweep` | `--weight-sweep --skip-main-grid`: 11 weight vectors (`WEIGHT_SWEEP`: u0, u10, u25, u50, time80, time80u25, cost80, energy80, t60c40, t40c60, t20c80) × {topsis, weighted_sum}; `sweep_tier` adds `--speed tier --drain 300` | 2 × 120 × 22 (the first `sweep` round ran 16, before the t/c splits) |
 | `load` | `iv1000`, `iv500`, `iv250`, `win120` | workflow interval 1 s / 0.5 s / 0.25 s (C3 is 2 s), or 2 s over a 120 s window; drain 300–600 s | 4 × 120 × 10 |
 | `speed` | `tier`, `cores` | `--speed tier` (edge 0.5×, fog 1×, cloud 2×) or `--speed cores` (speed = (cpu/4)^0.5) | 2 × 120 × 10 |
 
@@ -168,6 +168,10 @@ python3 scripts/analysis/pareto.py results/pareto/sweep/task_* results/c3_cluste
   --out analysis_out/pareto
 #   -> pareto_points.csv, pareto_per_config.csv, replication.csv
 #      (topsis[u25] must match C3 topsis within noise), pareto.pdf
+
+# Pareto under tier speed: speed/tier supplies the weight-independent policies.
+python3 scripts/analysis/pareto.py results/pareto/sweep_tier/task_* results/speed/tier/task_* \
+  --out analysis_out/pareto_tier
 
 # Load and speed: the usual pipeline, one level at a time or together with C3.
 make analysis GRID_DIRS="$(ls -d results/load/iv500/task_*)" ANALYSIS_OUT=analysis_out/load_iv500

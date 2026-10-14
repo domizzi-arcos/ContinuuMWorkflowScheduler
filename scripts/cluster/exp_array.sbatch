@@ -14,6 +14,7 @@
 #SBATCH --mem=4G
 #SBATCH --output=logs/%x_%A_%a.out
 
+
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"
 module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true

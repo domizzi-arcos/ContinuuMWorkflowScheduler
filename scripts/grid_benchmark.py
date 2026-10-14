@@ -226,7 +226,9 @@ TOPSIS_WEIGHT_VARIANTS = [
 # Weight sweep for the Pareto study (--weight-sweep). Each variant runs every
 # policy in --weight-algorithms (default topsis, weighted_sum, which share the
 # weights). The utilisation ladder keeps the default 0.4/0.3/0.3; u25 is the
-# C3 default and doubles as a replication check. Labels are [a-z0-9]+ (combo
+# C3 default and doubles as a replication check. The t<time>c<cost> splits
+# (energy and utilisation 0) fill in the time/cost trade-off between time80
+# and cost80, which matters when speeds differ. Labels are [a-z0-9]+ (combo
 # IDs and the analysis parser depend on it) and distinct from the variants
 # above, whose values differ.
 WEIGHT_SWEEP = [
@@ -238,6 +240,9 @@ WEIGHT_SWEEP = [
     {"label": "time80u25", "time": 0.80, "cost": 0.10, "energy": 0.10, "util": 0.25},
     {"label": "cost80",    "time": 0.10, "cost": 0.80, "energy": 0.10, "util": 0.0},
     {"label": "energy80",  "time": 0.10, "cost": 0.10, "energy": 0.80, "util": 0.0},
+    {"label": "t60c40",    "time": 0.60, "cost": 0.40, "energy": 0.0,  "util": 0.0},
+    {"label": "t40c60",    "time": 0.40, "cost": 0.60, "energy": 0.0,  "util": 0.0},
+    {"label": "t20c80",    "time": 0.20, "cost": 0.80, "energy": 0.0,  "util": 0.0},
 ]
 WEIGHT_SWEEP_ALGORITHMS = ["topsis", "weighted_sum"]
 
